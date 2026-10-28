@@ -57,10 +57,10 @@ function answers(count, value) {
 }
 
 test('every shipped definition is internally consistent', () => {
-  assert.equal(defs.length, 25)
+  assert.equal(defs.length, 26)
   const scored = defs.filter(def => def.scoring.type !== 'none')
   assert.equal(scored.length, 6, '六个计分量表')
-  assert.equal(defs.filter(def => def.scoring.type === 'none').length, 19, '十九份只收集不计分的问卷')
+  assert.equal(defs.filter(def => def.scoring.type === 'none').length, 20, '二十份只收集不计分的问卷')
   for (const def of defs) {
     const issues = validateDefinition(def).filter(item => item.level === 'bad')
     assert.deepEqual(issues, [], `${def.id} 定义有问题：${issues.map(item => item.text).join('；')}`)

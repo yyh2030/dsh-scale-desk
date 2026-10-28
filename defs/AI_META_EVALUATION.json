@@ -27,16 +27,6 @@
       "no": 5,
       "text": "",
       "reverse": false
-    },
-    {
-      "no": 6,
-      "text": "",
-      "reverse": false
-    },
-    {
-      "no": 7,
-      "text": "",
-      "reverse": false
     }
   ],
   "scoring": {
@@ -44,20 +34,28 @@
   },
   "missing": {
     "rule": "prorate",
-    "minAnswered": 7
+    "minAnswered": 5
   },
-  "codes": {},
+  "codes": {
+    "meta": [
+      "meta_ai_eval_core",
+      "meta_ai_eval_core",
+      "meta_ai_eval_core",
+      "meta_ai_eval_core",
+      "meta_ai_eval_core"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
-  "notes": "第 6、7 题是方向性锚点（1 = 明显偏向今天，5 = 明显偏向未来），题面里注明；前 5 题与后 2 题不要直接相加。不计分。",
+  "notes": "针对损失情境的理性、可信、一致性、易用与满意。不计分。",
   "id": "AI_META_EVALUATION",
-  "name": "AI 建议评价",
+  "name": "AI 建议评价（损失情境）",
   "short": "AI·评价",
-  "version": "自编（实验问卷题目整理）",
+  "version": "QuestionPro Survey_meta（2026-10 导出版本）",
   "waves": [
     "meta"
   ],
-  "itemCount": 7,
+  "itemCount": 5,
   "response": {
     "min": 1,
     "max": 5,

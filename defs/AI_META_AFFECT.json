@@ -26,14 +26,20 @@
     "rule": "prorate",
     "minAnswered": 3
   },
-  "codes": {},
+  "codes": {
+    "meta": [
+      "meta_affect_valence",
+      "meta_arousal",
+      "meta_fatigue"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "效价、唤醒、疲惫各一道，锚点不同（见题面），不能相加。不计分。",
   "id": "AI_META_AFFECT",
   "name": "决策后即时情绪",
   "short": "AI·情绪",
-  "version": "自编（实验问卷题目整理）",
+  "version": "QuestionPro Survey_meta（2026-10 导出版本）",
   "waves": [
     "meta"
   ],

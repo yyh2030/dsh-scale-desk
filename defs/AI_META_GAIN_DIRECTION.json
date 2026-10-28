@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 1
+  },
+  "codes": {
+    "meta": [
+      "meta_gain_direction"
+    ]
+  },
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "方向性单题，不能与评价题相加。不计分。",
+  "id": "AI_META_GAIN_DIRECTION",
+  "name": "AI 建议的方向（收益）",
+  "short": "AI·方向",
+  "version": "QuestionPro Survey_meta（2026-10 导出版本）",
+  "waves": [
+    "meta"
+  ],
+  "itemCount": 1,
+  "response": {
+    "min": 1,
+    "max": 5,
+    "labels": {
+      "1": "明显偏向今天获得",
+      "2": "有点偏向今天获得",
+      "3": "没有明显偏向",
+      "4": "有点偏向未来获得",
+      "5": "明显偏向未来获得"
+    }
+  }
+}

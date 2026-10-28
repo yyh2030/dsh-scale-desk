@@ -2,9 +2,9 @@
 
 DSH Web 界面左侧的「量表计分」。把**施测流程、问卷定义、原始作答、分数**摊开成可核查的几层，谁算的、按哪版算的、第几个阶段做的，都能回看。
 
-只读研究材料；写入只发生在 `_lab/`：`scales/flow.json`（施测流程）、`scales/defs`（定义）、`scales/answers`（原始作答）、`scales/imports.json`（导入与录入记录）、`scores.csv` / `scores_detail.csv`（派生分数）、`export/`（导出）。
+只读研究材料；写入只发生在 `_lab/`：`scales/flow.json`（施测流程）、`scales/defs`（定义）、`scales/answers`（原始作答）、`scales/imports.json`（导入与录入记录）、`scores.csv` / `scores_detail.csv` / `data_wide.csv`（派生分数）、`export/`（导出）。本机把 `labDir` 配在 **`D:/yyh-lab`**（不在 OneDrive），研究材料仍从 `projectRoot` 只读。
 
-覆盖面按 `02_实验材料与问卷/实验问卷题目整理.docx` 的实测顺序：**25 份问卷**（6 份计分量表 + 19 份只收集作答的问卷，其中含选择题、数值题与文本题），分 9 个阶段。MS 写作与 EFT/ERT 音频的指导语不放进插件，按实验材料执行。
+覆盖面按实验问卷与 **QuestionPro 2026-10 导出版本**：**26 份问卷**（6 份计分量表 + 20 份只收集作答的问卷，含选择题、数值题与文本题），分 9 个阶段。Survey_meta、想象／回忆评价、T1 FTPS 的题号与题量以导出表头为准；尚无导出的问卷仍按文档。MS 写作与 EFT/ERT 音频的指导语不放进插件，按实验材料执行。
 
 ## 三层分开
 
@@ -36,13 +36,15 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 
 **此刻版与过去一周版是两个量表**，分数不可比，所以定义里分成 `PANAS_NA_NOW` 与 `PANAS_NA_WEEK`，列名也分开。同理 FTPS 三个波次同在一列族里但按波次分列。
 
-## 其余十九份问卷（只收集，不计分）
+## 其余二十份问卷（只收集，不计分）
 
-按文档顺序：总体状态、时间感受、情绪补充、身体状态（Distracting 前段）；想象／回忆过程评价表；AI 比例的判断、AI 影响、AI 评价、AI 反抗、决策后情绪（Survey_meta）；金钱选择中的 AI 态度、AI 使用习惯、遇事询问 AI、三道数学题、冲动性、认知需求（Survey_post）；当前不适评分、结束时的支持需求、一周随访的不良体验与支持需求。
+按施测顺序：总体状态、时间感受、情绪补充、身体状态（Distracting 前段）；想象／回忆过程评价表；Survey_meta 六块（一致比例、影响、损失评价、收益评价、方向、即时情绪）；Survey_post（金钱态度、使用习惯、遇事求助、三道数学题、冲动性、认知需求）；当前不适评分、结束时的支持需求、一周随访的不良体验与支持需求。
 
-它们的定义 `scoring.type` 是 `none`：**能录、能导出原始值、不产生分数列**，也不做反向或折算。`scores.csv` 里只留每个波次的一列 `_缺失`。AI 评价第 6、7 题是方向性锚点、决策后情绪三题锚点各不相同，这些写在题面与定义说明里，避免被当成 1–5 直接相加。
+它们的定义 `scoring.type` 是 `none`：**能录、能导出原始值、不产生分数列**，也不做反向或折算。`scores.csv` 里只留每个波次的一列 `_缺失`。Survey_meta 的 0–100 比例题、方向题与三题情绪题的锚点各不相同，这些都写进题面与定义说明，避免被当成 1–5 直接相加。
 
 原文档没有给反向计分规则的（冲动性、认知需求）也没有标反向，若之后要算总分得先确认题号。
+
+Survey_meta 的题目结构以 2026-10 的 QuestionPro 导出为准：`meta_ai_request_rate` 6 题、`meta_in-C5` 5 题、`meta_ai_eval_core` 5 题、`meta_ai-C5` 5 题、`meta_gain_direction` 1 题、情绪 3 题；旧的「AI 反抗」3 题在新版问卷里已经没有了，定义与流程里的对应项已删除。
 
 ## 题目类型
 
@@ -94,7 +96,7 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 
 ## 面板五页
 
-- **量表库**：25 张卡（题量、计分方式、波次、已录份数、版本）。量表本身也能在这里改，不必找 agent：
+- **量表库**：26 张卡（题量、计分方式、波次、已录份数、版本）。量表本身也能在这里改，不必找 agent：
   - 「新建量表」填 id、名称、题量、取值上下限、波次、计分方式（累加/均分/不计分）、反向题号、缺失门槛，直接建一份定义；
   - 「编辑信息」改名称、简称、版本、计分说明、指导语；单分量表还能改计分方式、反向题号与缺失门槛（多分量表的计分键仍回 JSON 改）；
   - 「删除量表」会删定义，并把它从流程里引用它的步骤一并移除；已经有作答的量表会拒绝删除，先删作答。
@@ -195,9 +197,10 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
   name: '@local/scale-desk'
   config:
     projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文'
+    labDir: 'D:/yyh-lab'
 ```
 
-`labDir` 默认 `<projectRoot>/_lab`，`scalesDir` 默认 `<labDir>/scales`；`subjectsPath` 默认 `<labDir>/subjects.csv`（有就用来列出「已入组但还没量表」的人，没有就只列已录过量表的人）。`pythonPath` 默认指向 DSH 自带的 Python，用于把 `.xlsx` 转成表格（需要 openpyxl）；换运行环境时在 config 里覆盖它。
+`labDir` 默认 `<projectRoot>/_lab`，本机配成 `D:/yyh-lab`（`_lab` 不放在 OneDrive 里，避免同步把新文件回退）；`scalesDir` 默认 `<labDir>/scales`；`subjectsPath` 默认 `<labDir>/subjects.csv`（有就用来列出「已入组但还没量表」的人，没有就只列已录过量表的人）。`pythonPath` 默认指向 DSH 自带的 Python，用于把 `.xlsx` 转成表格（需要 openpyxl）；换运行环境时在 config 里覆盖它。
 
 改 Host 代码要重启 app；改 client 在「设置 → 插件」里把本插件关掉再打开，然后刷新页面。
 

@@ -17,6 +17,16 @@
       "no": 3,
       "text": "",
       "reverse": false
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
     }
   ],
   "scoring": {
@@ -24,20 +34,28 @@
   },
   "missing": {
     "rule": "prorate",
-    "minAnswered": 3
+    "minAnswered": 5
   },
-  "codes": {},
+  "codes": {
+    "meta": [
+      "meta_ai-C5",
+      "meta_ai-C5",
+      "meta_ai-C5",
+      "meta_ai-C5",
+      "meta_ai-C5"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
-  "notes": "故意不看、有意不采纳、认为没必要。不计分。",
-  "id": "AI_META_RESISTANCE",
-  "name": "AI 建议的回避与反抗",
-  "short": "AI·反抗",
-  "version": "自编（实验问卷题目整理）",
+  "notes": "针对收益情境的理性、可信、一致性、易用与满意。不计分。",
+  "id": "AI_META_GAIN",
+  "name": "AI 建议评价（收益情境）",
+  "short": "AI·评价·收益",
+  "version": "QuestionPro Survey_meta（2026-10 导出版本）",
   "waves": [
     "meta"
   ],
-  "itemCount": 3,
+  "itemCount": 5,
   "response": {
     "min": 1,
     "max": 5,

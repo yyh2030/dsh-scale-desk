@@ -61,7 +61,20 @@
     "rule": "prorate",
     "minAnswered": 10
   },
-  "codes": {},
+  "codes": {
+    "imagery": [
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process",
+      "eva_process"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "完成想象/回忆后立刻评定，7 点（1–7）；各题锚点不同，题面里自带。不计分。",

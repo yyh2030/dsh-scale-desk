@@ -22,6 +22,11 @@
       "no": 4,
       "text": "",
       "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
     }
   ],
   "scoring": {
@@ -29,20 +34,28 @@
   },
   "missing": {
     "rule": "prorate",
-    "minAnswered": 4
+    "minAnswered": 5
   },
-  "codes": {},
+  "codes": {
+    "meta": [
+      "meta_in-C5",
+      "meta_in-C5",
+      "meta_in-C5",
+      "meta_in-C5",
+      "meta_in-C5"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
-  "notes": "AI 建议对选择的影响、偏好表达与主导感。不计分。",
+  "notes": "收益/损失的想法一致性、主导感、偏好表达、整体影响。不计分。",
   "id": "AI_META_INFLUENCE",
-  "name": "AI 建议的影响",
+  "name": "AI 建议的影响与主导感",
   "short": "AI·影响",
-  "version": "自编（实验问卷题目整理）",
+  "version": "QuestionPro Survey_meta（2026-10 导出版本）",
   "waves": [
     "meta"
   ],
-  "itemCount": 4,
+  "itemCount": 5,
   "response": {
     "min": 1,
     "max": 5,

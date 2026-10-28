@@ -273,52 +273,68 @@ specs.push(
   }),
   unscored({
     id: 'AI_META_RATE',
-    name: 'AI 建议使用与采纳比例',
+    name: 'AI 建议的一致比例与参考程度',
     short: 'AI·比例',
-    version: '自编（实验问卷题目整理）',
+    version: 'QuestionPro Survey_meta（2026-10 导出版本）',
     waves: ['meta'],
-    itemCount: 2,
+    itemCount: 6,
     response: { min: 0, max: 100, labels: {} },
-    notes: '两题滑动框 0–100%：估计询问 AI 的比例、采纳的比例。不计分。'
+    codes: { meta: Array.from({ length: 6 }, () => 'meta_ai_request_rate') },
+    notes: '六道 0–100 滑动题：收益/损失/总体各问「与 AI 建议一致的比例」和「参考 AI 建议的程度」。不计分。'
   }),
   unscored({
     id: 'AI_META_INFLUENCE',
-    name: 'AI 建议的影响',
+    name: 'AI 建议的影响与主导感',
     short: 'AI·影响',
-    version: '自编（实验问卷题目整理）',
+    version: 'QuestionPro Survey_meta（2026-10 导出版本）',
     waves: ['meta'],
-    itemCount: 4,
+    itemCount: 5,
     response: { min: 1, max: 5, labels: AGREE },
-    notes: 'AI 建议对选择的影响、偏好表达与主导感。不计分。'
+    codes: { meta: Array.from({ length: 5 }, () => 'meta_in-C5') },
+    notes: '收益/损失的想法一致性、主导感、偏好表达、整体影响。不计分。'
   }),
   unscored({
     id: 'AI_META_EVALUATION',
-    name: 'AI 建议评价',
+    name: 'AI 建议评价（损失情境）',
     short: 'AI·评价',
-    version: '自编（实验问卷题目整理）',
+    version: 'QuestionPro Survey_meta（2026-10 导出版本）',
     waves: ['meta'],
-    itemCount: 7,
+    itemCount: 5,
     response: { min: 1, max: 5, labels: AGREE },
-    notes: '第 6、7 题是方向性锚点（1 = 明显偏向今天，5 = 明显偏向未来），题面里注明；前 5 题与后 2 题不要直接相加。不计分。'
+    codes: { meta: Array.from({ length: 5 }, () => 'meta_ai_eval_core') },
+    notes: '针对损失情境的理性、可信、一致性、易用与满意。不计分。'
   }),
   unscored({
-    id: 'AI_META_RESISTANCE',
-    name: 'AI 建议的回避与反抗',
-    short: 'AI·反抗',
-    version: '自编（实验问卷题目整理）',
+    id: 'AI_META_GAIN',
+    name: 'AI 建议评价（收益情境）',
+    short: 'AI·评价·收益',
+    version: 'QuestionPro Survey_meta（2026-10 导出版本）',
     waves: ['meta'],
-    itemCount: 3,
+    itemCount: 5,
     response: { min: 1, max: 5, labels: AGREE },
-    notes: '故意不看、有意不采纳、认为没必要。不计分。'
+    codes: { meta: Array.from({ length: 5 }, () => 'meta_ai-C5') },
+    notes: '针对收益情境的理性、可信、一致性、易用与满意。不计分。'
+  }),
+  unscored({
+    id: 'AI_META_GAIN_DIRECTION',
+    name: 'AI 建议的方向（收益）',
+    short: 'AI·方向',
+    version: 'QuestionPro Survey_meta（2026-10 导出版本）',
+    waves: ['meta'],
+    itemCount: 1,
+    response: { min: 1, max: 5, labels: { 1: '明显偏向今天获得', 2: '有点偏向今天获得', 3: '没有明显偏向', 4: '有点偏向未来获得', 5: '明显偏向未来获得' } },
+    codes: { meta: ['meta_gain_direction'] },
+    notes: '方向性单题，不能与评价题相加。不计分。'
   }),
   unscored({
     id: 'AI_META_AFFECT',
     name: '决策后即时情绪',
     short: 'AI·情绪',
-    version: '自编（实验问卷题目整理）',
+    version: 'QuestionPro Survey_meta（2026-10 导出版本）',
     waves: ['meta'],
     itemCount: 3,
     response: { min: 1, max: 5, labels: {} },
+    codes: { meta: ['meta_affect_valence', 'meta_arousal', 'meta_fatigue'] },
     notes: '效价、唤醒、疲惫各一道，锚点不同（见题面），不能相加。不计分。'
   }),
   unscored({
