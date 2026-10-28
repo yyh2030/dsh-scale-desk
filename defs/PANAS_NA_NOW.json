@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "id": "PANAS_NA_NOW",
+  "name": "PANAS 负性情绪分量表（此刻版）",
+  "short": "PANAS-NA·此刻",
+  "version": "邱林、郑雪、王雁飞（2008）修订，9 题 NA 分量表；此刻指导语",
+  "waves": [
+    "T0",
+    "T2"
+  ],
+  "itemCount": 9,
+  "response": {
+    "min": 1,
+    "max": 5,
+    "labels": {
+      "1": "非常轻微或根本没有",
+      "2": "比较轻微",
+      "3": "中等程度",
+      "4": "比较强烈",
+      "5": "非常强烈"
+    }
+  },
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 6,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 7,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 8,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 9,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "mean",
+    "subscales": {
+      "na": {
+        "label": "负性情绪",
+        "items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "reverse": [],
+        "range": [
+          1,
+          5
+        ],
+        "multiplier": 1
+      }
+    }
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 7
+  },
+  "codes": {
+    "T0": [
+      "t0_na_01",
+      "t0_na_02",
+      "t0_na_03",
+      "t0_na_04",
+      "t0_na_05",
+      "t0_na_06",
+      "t0_na_07",
+      "t0_na_08",
+      "t0_na_09"
+    ],
+    "T2": [
+      "t2_na_01",
+      "t2_na_02",
+      "t2_na_03",
+      "t2_na_04",
+      "t2_na_05",
+      "t2_na_06",
+      "t2_na_07",
+      "t2_na_08",
+      "t2_na_09"
+    ]
+  },
+  "unit": "分",
+  "decimals": 2,
+  "source": "量表计分与来源.docx M05；邱林、郑雪、王雁飞（2008），N=290，α: PA .87/.87、NA .84/.86",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "9 项均正向计分，取平均分，范围 1–5。此刻版与过去一周版是两个量表（PANAS_NA_WEEK），分数不可混用。"
+}

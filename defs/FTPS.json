@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "id": "FTPS",
+  "name": "未来时间洞察力量表",
+  "short": "FTPS",
+  "version": "10 题版；中文版来源待核",
+  "waves": [
+    "T0",
+    "T1",
+    "T2"
+  ],
+  "itemCount": 10,
+  "response": {
+    "min": 1,
+    "max": 7,
+    "labels": {
+      "1": "完全不正确",
+      "2": "比较不正确",
+      "3": "有一点不正确",
+      "4": "不确定",
+      "5": "有一点正确",
+      "6": "比较正确",
+      "7": "完全正确"
+    }
+  },
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 6,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 7,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 8,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 9,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 10,
+      "text": "",
+      "reverse": true
+    }
+  ],
+  "scoring": {
+    "type": "mean",
+    "subscales": {
+      "total": {
+        "label": "总分",
+        "items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "reverse": [
+          8,
+          9,
+          10
+        ],
+        "range": [
+          1,
+          7
+        ],
+        "multiplier": 1
+      }
+    }
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 8
+  },
+  "codes": {
+    "T0": [
+      "t0_ftps_01",
+      "t0_ftps_02",
+      "t0_ftps_03",
+      "t0_ftps_04",
+      "t0_ftps_05",
+      "t0_ftps_06",
+      "t0_ftps_07",
+      "t0_ftps_08",
+      "t0_ftps_09",
+      "t0_ftps_10"
+    ],
+    "T1": [
+      "t1_ftps_01",
+      "t1_ftps_02",
+      "t1_ftps_03",
+      "t1_ftps_04",
+      "t1_ftps_05",
+      "t1_ftps_06",
+      "t1_ftps_07",
+      "t1_ftps_08",
+      "t1_ftps_09",
+      "t1_ftps_10"
+    ],
+    "T2": [
+      "t2_ftps_01",
+      "t2_ftps_02",
+      "t2_ftps_03",
+      "t2_ftps_04",
+      "t2_ftps_05",
+      "t2_ftps_06",
+      "t2_ftps_07",
+      "t2_ftps_08",
+      "t2_ftps_09",
+      "t2_ftps_10"
+    ]
+  },
+  "unit": "分",
+  "decimals": 2,
+  "source": "量表计分与来源.docx M04；原版出处待核",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "第 8、9、10 题反向计分；以 10 题平均分为主指标，得分越高表示主观未来越开放、可规划时间越充足。三个波次同一量表，列名按波次分开。"
+}

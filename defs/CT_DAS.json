@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "id": "CT_DAS",
+  "name": "中文版 Templer 死亡焦虑量表",
+  "short": "CT-DAS",
+  "version": "Templer（1970）；Yang et al.（2012）中文版，15 题",
+  "waves": [
+    "T0"
+  ],
+  "itemCount": 15,
+  "response": {
+    "min": 1,
+    "max": 5,
+    "labels": {
+      "1": "非常不同意",
+      "2": "比较不同意",
+      "3": "不确定",
+      "4": "比较同意",
+      "5": "非常同意"
+    }
+  },
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 6,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 7,
+      "text": "",
+      "reverse": true
+    },
+    {
+      "no": 8,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 9,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 10,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 11,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 12,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 13,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 14,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 15,
+      "text": "",
+      "reverse": true
+    }
+  ],
+  "scoring": {
+    "type": "sum",
+    "subscales": {
+      "total": {
+        "label": "死亡焦虑",
+        "items": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "reverse": [
+          2,
+          3,
+          5,
+          6,
+          7,
+          15
+        ],
+        "range": [
+          15,
+          75
+        ],
+        "multiplier": 1
+      }
+    }
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 12
+  },
+  "codes": {
+    "T0": [
+      "t0_ctdas_01",
+      "t0_ctdas_02",
+      "t0_ctdas_03",
+      "t0_ctdas_04",
+      "t0_ctdas_05",
+      "t0_ctdas_06",
+      "t0_ctdas_07",
+      "t0_ctdas_08",
+      "t0_ctdas_09",
+      "t0_ctdas_10",
+      "t0_ctdas_11",
+      "t0_ctdas_12",
+      "t0_ctdas_13",
+      "t0_ctdas_14",
+      "t0_ctdas_15"
+    ]
+  },
+  "unit": "分",
+  "decimals": 2,
+  "source": "量表计分与来源.docx M13；Templer（1970）；Yang et al.（2012）中文版 α=.71、重测 .831",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "反向题：第 2、3、5、6、7、15 题。15 项相加，范围 15–75，分数越高死亡焦虑越高。"
+}

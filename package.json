@@ -1,0 +1,40 @@
+{
+  "name": "@local/scale-desk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "量表计分：量表库、答题纸录入、外部导入、一键计分与校验，输出 _lab/scores.csv",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "scoring.js",
+    "client.js",
+    "defs",
+    "tools",
+    "tests",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test tests/scoring.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
