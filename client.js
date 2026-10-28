@@ -1664,6 +1664,23 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const keepOne = async order => {
+        const label = order === 'first' ? '第一份' : '最后一份'
+        if (window.confirm && !window.confirm('把每个编号的重复作答都删掉，只留' + label + '？跨所有量表与波次。')) return
+        setBusy('keep')
+        setError('')
+        try {
+          const result = await call('keepOnePerId', { order })
+          toast('已处理重复编号：删掉 ' + result.removed + ' 行，每个编号只留' + label)
+          await load()
+          if (refresh) refresh()
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
       return h('div', { className: 'sd-card' },
         h('div', { className: 'sd-card-head' },
           h('h3', null, '批量清理'),
@@ -1708,6 +1725,12 @@ window.__ModuleLoader__.load({
               )
             )
           : h('div', { className: 'sd-note' }, '没有编号可疑或重复的作答。'),
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('span', { className: 'sd-note' }, '同一编号交了多份：'),
+          Btn({ children: busy === 'keep' ? '处理中…' : '只留最后一份', kind: 'outline', small: true, disabled: Boolean(busy), onClick: () => keepOne('last') }),
+          Btn({ children: '只留第一份', kind: 'ghost', small: true, disabled: Boolean(busy), onClick: () => keepOne('first') }),
+          h('span', { className: 'sd-note' }, '按导出顺序，最后一行当作最新提交')
+        ),
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           h('span', { className: 'sd-note' }, '批量改编号：'),
           h('input', {

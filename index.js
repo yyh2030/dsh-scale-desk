@@ -1308,6 +1308,53 @@ export function apply(ctx, config = {}) {
       }
     },
 
+    /**
+     * Keep one submission per id (the last row, i.e. the latest response, by
+     * default) across every answer file, dropping the other copies.
+     */
+    async keepOnePerId(payload) {
+      const current = await model(false)
+      const order = payload && payload.order === 'first' ? 'first' : 'last'
+      const scale = String((payload && payload.scale) || '')
+      const wave = String((payload && payload.wave) || '')
+      let removed = 0
+      const touched = []
+      for (const file of current.answerFiles) {
+        if (scale && file.scale !== scale) continue
+        if (wave && file.wave !== wave) continue
+        const positions = new Map()
+        file.rows.forEach((row, index) => {
+          if (!positions.has(row.id)) positions.set(row.id, [])
+          positions.get(row.id).push(index)
+        })
+        const duplicates = [...positions.entries()].filter(([, list]) => list.length > 1)
+        if (!duplicates.length) continue
+        const keep = new Set()
+        for (const [, list] of duplicates) {
+          keep.add(order === 'first' ? list[0] : list[list.length - 1])
+        }
+        const rows = file.rows.filter((row, index) => {
+          const list = positions.get(row.id)
+          return list.length === 1 || keep.has(index)
+        })
+        const dropped = file.rows.length - rows.length
+        if (!dropped) continue
+        const def = current.defs.find(item => item.id === file.scale)
+        await writeAnswerFile(cfg, file.scale, file.wave, rows, def ? def.itemCount : 0)
+        await appendProvenance(cfg, {
+          action: 'keep-one-bulk',
+          scale: file.scale,
+          wave: file.wave,
+          note: `${duplicates.length} 个编号只留${order === 'first' ? '第一' : '最后'}一份，删 ${dropped} 行`
+        })
+        removed += dropped
+        touched.push({ scale: file.scale, wave: file.wave, ids: duplicates.length, removed: dropped })
+      }
+      if (!removed) throw new RouteError('invalid', '没有重复编号，不用处理')
+      await syncScores()
+      return { order, removed, touched }
+    },
+
     /** Remove one subject id from every answer file (test submissions, typos). */
     async deleteSubject(payload) {
       const current = await model(false)
