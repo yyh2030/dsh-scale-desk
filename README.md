@@ -13,9 +13,11 @@ DSH Web 界面左侧的「量表计分」。把**施测流程、问卷定义、�
 | 流程 | `_lab/scales/flow.json` | 阶段与步骤的施测顺序，量表步骤指向 定义+波次 | 能，改了按包内版本重播种 |
 | 定义 | `_lab/scales/defs/<量表>.json` | 题号、反向标记、计分键、缺失规则、导出码、出处、版本、指导语 | 不能，删了要重写 |
 | 原始作答 | `_lab/scales/answers/<量表>__<波次>.csv` | `编号,q01,q02,...`，空格 = 缺失，保留原始文本 | 不能，这是原始数据 |
-| 派生分数 | `_lab/scores.csv`、`_lab/scores_detail.csv` | 宽表分数、每题明细 | 能，每次录入或导入后自动重算，也可点「重算」 |
+| 派生分数 | `_lab/scores.csv`、`_lab/scores_detail.csv`、`_lab/data_wide.csv` | 宽表分数、每题明细、分数与题目合并的宽表 | 能，每次录入或导入后自动重算，也可点「重算」 |
 
 这条分工对应设计稿的三条约定：原始数据只读、派生可重算、版本单独记（`imports.json` 记每批数据录入时的定义版本）。
+
+`data_wide.csv` 是给分析的整合表：一行一个被试，先是全部量表分与缺失列，再是每一题的原始作答（列名 `量表_波次_q01`），不需要再自己做 merge。
 
 
 ## 六个计分量表
@@ -78,6 +80,8 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 
 `scores_detail.csv` 是长表：`编号,量表,波次,题号,导出码,反向,原始值,计分值,备注`，用来核查反向题是否翻对了；不计分的问卷也能从这里拿原始值。
 
+`data_wide.csv` 把两者并排：`编号` + 全部分数与缺失列 + 全部题目列（`量表_波次_q01`，原始作答）。题目列按定义的题号顺序排，重复编号的行在这份表里留空。
+
 ## 三条入口
 
 1. **外部导入**：QuestionPro / 问卷星 / Excel 另存的 CSV 或 TSV。列名先认导出码（`t0_stais_01`），认不出再认 `Q1` / `第1题` / 纯数字列；预览时可手动改每题对应哪一列。UTF-8、GBK、GB18030 都试一遍再解码。导入只存原始文本，越界值不修，留给校验报出来。
@@ -86,11 +90,23 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 
 ## 面板五页
 
-- **量表库**：25 张卡（题量、计分方式、波次、已录份数、版本）；点开看指导语、逐题题面与反向标记、计分键、取值范围与乘数、出处与授权、定义文件路径；题面与波次都能在这里改。
+- **量表库**：25 张卡（题量、计分方式、波次、已录份数、版本）。量表本身也能在这里改，不必找 agent：
+  - 「新建量表」填 id、名称、题量、取值上下限、波次、计分方式（累加/均分/不计分）、反向题号、缺失门槛，直接建一份定义；
+  - 「编辑信息」改名称、简称、版本、计分说明、指导语；单分量表还能改计分方式、反向题号与缺失门槛（多分量表的计分键仍回 JSON 改）；
+  - 「删除量表」会删定义，并把它从流程里引用它的步骤一并移除；已经有作答的量表会拒绝删除，先删作答。
 - **流程**：按实验顺序列出 9 个阶段，每步标明类型（量表/任务/纸质/人口学/音频/书写/问卷/练习）与说明；量表步骤带波次、已录份数与「录入」按钮，直接跳到答题纸。
-- **录入**：手填答题纸 + 导入预览（映射表、样本行、越界/重复编号提示、合并或覆盖）。已录名单可点回填。
-- **计分**：宽表（按量表分组的两层表头，缺题与未计分带 `!`），筛选「有未计分 / 有折算 / 有整份未录」；点行看该被试每个波次的**每题明细**（原始值 → 反向后计分值）。「重算并写 scores.csv」「导出分数与报告」。
+- **录入**：三个子页。
+  - **手填答题纸**：按题型作答，已录过的会载入原值。
+  - **导入导出文件**：映射预览、样本行、越界提示、合并或覆盖。
+  - **核对与修正**：列出某量表某波次的每一份作答。可「改编号」修错号、「删除」多录的、重复编号时「保留这份」；有一份重复未处理时，这一段不参与计分，计分表里显示「重复」。
+- **计分**：宽表（按量表分组的两层表头，缺题与未计分带 `!`），筛选「有未计分 / 有折算 / 有整份未录 / 有重复编号」；点行看该被试每个波次的**每题明细**（原始值 → 反向后计分值）。「重算并写 scores.csv」「导出分数与报告」（报告含 scores、scores_detail 与 data_wide 三份）。
 - **校验**：定义与数据两边都查，分高 / 中 / 提示三级，可按量表筛。
+
+## 重复编号与改号
+
+同一量表同一波次里，一个编号出现多行就是「重复」。导入时：内容完全相同视为重复导入，原位替换；内容不同就保留两行并标出来，等人在「核对」里选。
+
+有重复的编号**整段不计分**（单元格显示「重复」），校验里也会报一条高优先级，直到勾选「保留这份」或删掉一份。改编号时如果目标编号已经有作答，会被拒绝——先处理掉那份，避免把两个人的数据并成一份。
 
 ## 校验查什么
 
@@ -116,11 +132,18 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 - `POST {action:'detail', payload:{id, scale, wave}}` —— 每题原始值 / 反向后值
 - `POST {action:'save', payload:{id, scale, wave, values}}` —— 手填保存
 - `POST {action:'clear', payload:{id, scale, wave}}` —— 删除某人某份
+- `POST {action:'answers', payload:{scale, wave}}` —— 某量表某波次的逐行列表（含重复标记）
+- `POST {action:'renameAnswer', payload:{scale, wave, index, to}}` —— 改某一行的编号
+- `POST {action:'deleteAnswerRow', payload:{scale, wave, index}}` —— 删除某一行
+- `POST {action:'keepAnswer', payload:{scale, wave, index}}` —— 重复编号里保留这一行、删掉同编号其余行
+- `POST {action:'createScale', payload:{id, name, short, itemCount, min, max, waves, scoringType, reverse, minAnswered}}` —— 新建定义
+- `POST {action:'saveMeta', payload:{scale, name, short, version, notes, instructions, scoringType?, reverse?, minAnswered?}}` —— 改基本信息与计分设置
+- `POST {action:'deleteScale', payload:{scale}}` —— 删定义（有作答则拒绝；同时移除流程里引用它的步骤）
 - `POST {action:'importPreview', payload:{data|text, filename, scale?, wave?}}` —— 识别映射，不写盘
 - `POST {action:'importApply', payload:{data|text, filename, scale, wave, mode, mapping}}` —— 落盘（`merge` / `replace`）
-- `POST {action:'score'}` —— 重算并写 `scores.csv` + `scores_detail.csv`
+- `POST {action:'score'}` —— 重算并写 `scores.csv` + `scores_detail.csv` + `data_wide.csv`
 - `POST {action:'validate'}` —— 重新校验
-- `POST {action:'export'}` —— 写 `_lab/export/量表分数_YYYYMMDD.csv` 与 `.md`
+- `POST {action:'export'}` —— 写 `_lab/export/量表分数_YYYYMMDD.csv`、`分数与题目宽表_YYYYMMDD.csv` 与 `.md`
 - `POST {action:'reveal', payload:{target}}` —— 打开 `scales` / `lab` / `export` 目录
 
 ## 与运行台、分析直通的关系
@@ -177,6 +200,6 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 ## 测试
 
 ```powershell
-node --test tests/scoring.test.mjs   # 28 项：定义、反向、折算、乘数、题型与选项、列名、粘贴解析、导入映射、校验、CSV
-node tests/smoke.mjs                 # 临时目录跑完整链路：播种 25 份问卷与流程 → 导入 → 手填（含文本题）→ 计分 → 导出 → 工具 → 题面 → 波次
+node --test tests/scoring.test.mjs   # 30 项：定义、反向、折算、乘数、题型与选项、列名、重复编号、粘贴解析、导入映射、校验、CSV
+node tests/smoke.mjs                 # 临时目录跑完整链路：播种 25 份问卷与流程 → 导入 → 手填（含文本题）→ 重复/改号/删行 → 建库/改库/删库 → 计分 → 导出（含宽表）→ 工具 → 题面 → 波次
 ```

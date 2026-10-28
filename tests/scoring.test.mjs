@@ -16,6 +16,7 @@ import {
   buildDetail,
   buildScores,
   detailCsv,
+  wideCsv,
   guessTarget,
   mapImportColumns,
   normalizeDef,
@@ -386,4 +387,30 @@ test('multi choice joins the selected values', () => {
   const result = scoreAnswers(def, { 1: '私下交谈, 获取校内心理支持信息' })
   assert.equal(result.items[0].value, '私下交谈,获取校内心理支持信息')
   assert.equal(result.answered, 1)
+})
+
+test('a duplicated id is flagged and never scored until one copy is kept', () => {
+  const rows = [
+    { scale: 'FTPS', wave: 'T0', id: '11002', values: answers(10, 4) },
+    { scale: 'FTPS', wave: 'T0', id: '11002', values: answers(10, 5) }
+  ]
+  const scores = buildScores(defs, rows, [])
+  const cell = scores.rows[0].cells.FTPS_T0
+  assert.equal(cell.status, 'duplicate')
+  assert.equal(cell.value, null)
+  assert.ok(scores.rows[0].flags.some(text => /有 2 份作答/.test(text)))
+  assert.equal(scores.counts.complete, 0)
+})
+
+test('wide csv puts scale scores and every raw item answer side by side', () => {
+  const rows = [{ scale: 'FTPS', wave: 'T0', id: '11002', values: answers(10, 4) }]
+  const scores = buildScores(defs, rows, [])
+  const table = parseCsv(wideCsv(defs, scores, rows))
+  const header = table[0]
+  assert.ok(header.includes('FTPS_T0'))
+  assert.ok(header.includes('FTPS_T0_q01'))
+  assert.ok(header.includes('CT_DAS_T0_q01'))
+  assert.equal(table[1][header.indexOf('FTPS_T0')], '4')
+  assert.equal(table[1][header.indexOf('FTPS_T0_q01')], '4')
+  assert.equal(table[1][header.indexOf('STAI_S_T0_q01')], '')
 })

@@ -577,21 +577,30 @@ function answerKey(scale, wave) {
   return `${scale}__${wave}`
 }
 
-/** Index [{scale, wave, id, values}] as scale__wave → id → values. */
+/** Index [{scale, wave, id, values}] as scale__wave → id → row[] (duplicates kept). */
 export function indexAnswers(answerRows) {
   const index = new Map()
   for (const row of answerRows || []) {
     const key = answerKey(row.scale, row.wave)
     if (!index.has(key)) index.set(key, new Map())
-    index.get(key).set(row.id, row)
+    const byId = index.get(key)
+    if (!byId.has(row.id)) byId.set(row.id, [])
+    byId.get(row.id).push(row)
   }
   return index
+}
+
+/** The single answered row for a subject, or null when there are zero or many. */
+export function pickedAnswer(index, scale, wave, id) {
+  const rows = index.get(answerKey(scale, wave))?.get(id) || []
+  return rows.length === 1 ? rows[0] : null
 }
 
 /**
  * The wide score table: one row per subject, one column per scale/wave/subscale.
  * Subjects with no answers still get a row, so "who has not been entered yet"
- * is visible instead of invisible.
+ * is visible instead of invisible. A duplicated id is never silently resolved:
+ * its cells are marked `duplicate` until someone keeps one copy.
  */
 export function buildScores(defs, answerRows, subjectIds = []) {
   const index = indexAnswers(answerRows)
@@ -602,23 +611,30 @@ export function buildScores(defs, answerRows, subjectIds = []) {
     const flags = []
     for (const def of defs) {
       for (const wave of def.waves) {
-        const entry = index.get(answerKey(def.id, wave))?.get(id)
+        const entries = index.get(answerKey(def.id, wave))?.get(id) || []
+        const duplicate = entries.length > 1
+        const entry = duplicate ? null : entries[0] || null
         const values = entry ? entry.values : {}
         const result = scoreAnswers(def, values)
         const missingCol = scoreColumns(def).find(col => col.kind === 'missing' && col.wave === wave)
         if (missingCol) {
-          cells[missingCol.key] = { value: entry ? result.missing : null, status: entry ? result.status : 'absent' }
+          cells[missingCol.key] = {
+            value: entry ? result.missing : null,
+            status: duplicate ? 'duplicate' : entry ? result.status : 'absent',
+            count: duplicate ? entries.length : entry ? 1 : 0
+          }
         }
         for (const col of scoreColumns(def).filter(item => item.kind === 'score' && item.wave === wave)) {
           const sub = result.subs[col.sub]
           if (!sub) continue
           cells[col.key] = {
-            value: sub.score,
-            status: entry ? sub.status : 'absent',
+            value: duplicate ? null : sub.score,
+            status: duplicate ? 'duplicate' : entry ? sub.status : 'absent',
             missing: sub.missing,
             answered: sub.answered
           }
         }
+        if (duplicate) flags.push(`${def.short} ${wave}：编号 ${id} 有 ${entries.length} 份作答，先在「录入 → 核对」里保留一份`)
         if (entry && result.invalid.length) {
           flags.push(`${def.short} ${wave}：${result.invalid.map(item => `第 ${item.no} 题「${item.raw}」`).join('、')}`)
         }
@@ -630,7 +646,7 @@ export function buildScores(defs, answerRows, subjectIds = []) {
   // One pass for counts, so the panel does not recompute them per render.
   const filled = rows.filter(row => Object.values(row.cells).some(cell => cell.status !== 'absent'))
   const complete = rows.filter(row => defs.every(def => def.waves.every(wave => {
-    const entry = index.get(answerKey(def.id, wave))?.get(row.id)
+    const entry = pickedAnswer(index, def.id, wave, row.id)
     if (!entry) return false
     const result = scoreAnswers(def, entry.values)
     return result.answered === def.itemCount
@@ -679,6 +695,40 @@ export function scoresCsv(defs, scores) {
 export function detailCsv(detailRows) {
   const header = ['编号', '量表', '波次', '题号', '导出码', '反向', '原始值', '计分值', '备注']
   const rows = detailRows.map(row => [row.id, row.scale, row.wave, row.no, row.code, row.reverse, row.raw, row.scored, row.note])
+  return toCsv([header, ...rows])
+}
+
+/**
+ * The integrated dataset: one row per subject, the scale scores first, then
+ * every item's raw answer (`<scales>_<wave>_qNN`). This is the file analysis
+ * starts from — no join required.
+ */
+export function wideCsv(defs, scores, answerRows) {
+  const index = indexAnswers(answerRows)
+  const itemColumns = []
+  for (const def of defs) {
+    for (const wave of def.waves) {
+      for (const item of def.items) {
+        itemColumns.push({ scale: def.id, wave, no: item.no, key: `${def.id}_${wave}_q${String(item.no).padStart(2, '0')}` })
+      }
+    }
+  }
+  const header = ['编号', ...scores.columns.map(col => col.key), ...itemColumns.map(col => col.key)]
+  const scoreById = new Map(scores.rows.map(row => [row.id, row]))
+  const ids = [...scoreById.keys()].sort()
+  const rows = ids.map(id => {
+    const scoreRow = scoreById.get(id)
+    const cells = scores.columns.map(col => {
+      const cell = scoreRow && scoreRow.cells[col.key]
+      return cell && cell.value !== null && cell.value !== undefined ? cell.value : ''
+    })
+    const items = itemColumns.map(col => {
+      const entry = pickedAnswer(index, col.scale, col.wave, id)
+      const value = entry ? entry.values[col.no] : undefined
+      return value === undefined || value === null ? '' : value
+    })
+    return [id, ...cells, ...items]
+  })
   return toCsv([header, ...rows])
 }
 
@@ -964,6 +1014,15 @@ export function validateData(defs, answerFiles, scores, provenance = []) {
         list.push(issue('warn', 'data', `${def.short} ${file.wave} ${row.id} 缺失过多，未计分（${detail}）`, { scale: def.id, wave: file.wave, id: row.id }))
       } else if (result.missing > 0) {
         list.push(issue('info', 'data', `${def.short} ${file.wave} ${row.id} 缺 ${result.missing} 题，已按比例折算（${def.missing.rule}）`, { scale: def.id, wave: file.wave, id: row.id }))
+      }
+    }
+    const idCounts = new Map()
+    for (const row of file.rows || []) idCounts.set(row.id, (idCounts.get(row.id) || 0) + 1)
+    for (const [id, count] of idCounts) {
+      if (count > 1) {
+        list.push(issue('bad', 'data', `${def.short} ${file.wave} 编号 ${id} 有 ${count} 份作答，先在「录入 → 核对」里保留一份`, {
+          scale: def.id, wave: file.wave, id, hint: '重复的编号这一段不会被计分，直到只留一份'
+        }))
       }
     }
     if (rowsWithIssues > 1 && list.length > 400) break

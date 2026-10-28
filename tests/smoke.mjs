@@ -252,5 +252,93 @@ assert.deepEqual(
   ['T0', 'T2']
 )
 
+/* 13. two conflicting submissions: flag, keep one, rename, delete ---------- */
+const ftpsT2 = ['t2_participant_id', ...Array.from({ length: 10 }, (_, i) => `t2_ftps_${String(i + 1).padStart(2, '0')}`)]
+const t2Csv = value => [ftpsT2, ['11022', ...Array(10).fill(String(value))]].map(line => line.join(',')).join('\r\n')
+await request(handler, 'POST', 'importApply', {
+  data: Buffer.from(t2Csv(4), 'utf8').toString('base64'),
+  filename: 't2-a.csv'
+})
+await request(handler, 'POST', 'importApply', {
+  data: Buffer.from(t2Csv(5), 'utf8').toString('base64'),
+  filename: 't2-b.csv'
+})
+const listed = await request(handler, 'POST', 'answers', { scale: 'FTPS', wave: 'T2' })
+assert.equal(listed.rows.length, 2)
+assert.equal(listed.rows[0].copies, 2)
+assert.equal(listed.rows[1].copies, 2)
+
+let dupStatus = await request(handler, 'GET', 'status')
+let dupCell = dupStatus.scores.rows.find(row => row.id === '11022').cells.FTPS_T2
+assert.equal(dupCell.status, 'duplicate')
+assert.equal(dupCell.value, null)
+
+// Keep the second submission (all 5s), so the mean becomes 5.
+const kept = await request(handler, 'POST', 'keepAnswer', { scale: 'FTPS', wave: 'T2', index: 1 })
+assert.equal(kept.removed, 1)
+dupStatus = await request(handler, 'GET', 'status')
+dupCell = dupStatus.scores.rows.find(row => row.id === '11022').cells.FTPS_T2
+assert.equal(dupCell.status, 'ok')
+// FTPS items 8–10 are reverse: ten 5s score (7×5 + 3×3) / 10 = 4.4
+assert.equal(dupCell.value, 4.4)
+
+const renamed = await request(handler, 'POST', 'renameAnswer', { scale: 'FTPS', wave: 'T2', index: 0, to: '11033' })
+assert.equal(renamed.from, '11022')
+assert.equal(renamed.to, '11033')
+assert.equal((await request(handler, 'POST', 'answers', { scale: 'FTPS', wave: 'T2' })).rows[0].id, '11033')
+
+const dropped = await request(handler, 'POST', 'deleteAnswerRow', { scale: 'FTPS', wave: 'T2', index: 0 })
+assert.equal(dropped.remaining, 0)
+
+/* 14. manual library management: create, edit, delete --------------------- */
+const created = await request(handler, 'POST', 'createScale', {
+  id: 'TEST_SCALE',
+  name: '测试量表',
+  short: '测试',
+  itemCount: 5,
+  min: 1,
+  max: 5,
+  waves: ['T0'],
+  scoringType: 'sum',
+  reverse: [2, 4],
+  minAnswered: 4
+})
+assert.equal(created.itemCount, 5)
+
+let library = await request(handler, 'GET', 'status')
+let testDef = library.instruments.find(item => item.id === 'TEST_SCALE')
+assert.equal(testDef.scoringType, 'sum')
+assert.deepEqual(testDef.reverse, [2, 4])
+assert.equal(testDef.itemCount, 5)
+
+await request(handler, 'POST', 'saveMeta', {
+  scale: 'TEST_SCALE',
+  name: '测试量表（改）',
+  short: '测试2',
+  version: 'v2',
+  notes: '',
+  instructions: '指导语',
+  scoringType: 'mean',
+  reverse: [2],
+  minAnswered: 3
+})
+library = await request(handler, 'GET', 'status')
+testDef = library.instruments.find(item => item.id === 'TEST_SCALE')
+assert.equal(testDef.name, '测试量表（改）')
+assert.equal(testDef.scoringType, 'mean')
+assert.deepEqual(testDef.reverse, [2])
+assert.equal(testDef.instructions, '指导语')
+
+await request(handler, 'POST', 'deleteScale', { scale: 'TEST_SCALE' })
+library = await request(handler, 'GET', 'status')
+assert.equal(library.instruments.some(item => item.id === 'TEST_SCALE'), false)
+
+/* 15. the integrated wide table is written beside the scores --------------- */
+await request(handler, 'POST', 'score')
+const wideTable = parseCsv(await readFile(path.join(labDir, 'data_wide.csv'), 'utf8'))
+assert.ok(wideTable[0].includes('FTPS_T0_q01'))
+assert.ok(wideTable[0].includes('DASS_21_week_q21'))
+assert.equal(wideTable[0][0], '编号')
+
 await rm(root, { recursive: true, force: true })
-console.log('smoke ok: seed → import → manual entry → score → validate → export → tools → item texts → waves')
+console.log('smoke ok: seed → import → entry → duplicates → library → score → validate → export → tools → texts → waves → wide')

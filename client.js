@@ -109,6 +109,8 @@ window.__ModuleLoader__.load({
 .sd-cell.is-empty{color:var(--sd-text2);opacity:.55}
 .sd-field{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sd-field label{font-size:11.5px;color:var(--sd-text2);white-space:nowrap}
+.sd-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 12px}
+.sd-form-grid label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sd-text2)}
 .sd-input,.sd-select{height:30px;padding:0 9px;border:1px solid var(--sd-line);border-radius:7px;background:var(--sd-bg);color:var(--sd-text);font-size:12.5px;outline:none;font-family:inherit;min-width:0}
 .sd-input:focus,.sd-select:focus{border-color:var(--sd-brand)}
 .sd-input.sd-id-input{width:88px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
@@ -178,7 +180,7 @@ window.__ModuleLoader__.load({
     const WAVE_LABEL = { T0: 'T0 基线', T1: 'T1 诱导后', T2: 'T2 干预后', imagery: '想象后', meta: 'AI 决策后', post: '事后问卷', end: '结束', week: '一周追踪' }
     const FLOW_KIND = { scale: '量表', task: '任务', paper: '纸质', demo: '人口学', audio: '音频', text: '书写', survey: '问卷', rest: '练习' }
     const LEVEL_TEXT = { bad: '高', warn: '中', info: '提示' }
-    const STATUS_TEXT = { ok: '完成', prorated: '折算', incomplete: '未计分', absent: '未录', empty: '未录', partial: '部分' }
+    const STATUS_TEXT = { ok: '完成', prorated: '折算', incomplete: '未计分', absent: '未录', empty: '未录', partial: '部分', duplicate: '重复编号' }
     const STATUS_CLASS = { ok: 'ok', prorated: 'warn', incomplete: 'bad', absent: 'info', empty: 'info', partial: 'warn' }
 
     function waveName(wave) {
@@ -346,12 +348,126 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const [creating, setCreating] = useState(false)
+      const [createForm, setCreateForm] = useState({
+        id: '', name: '', short: '', itemCount: '10', min: '1', max: '7',
+        waves: 'T0', scoringType: 'sum', reverse: '', minAnswered: ''
+      })
+      const [createError, setCreateError] = useState('')
+      const [editingMeta, setEditingMeta] = useState(false)
+      const [metaForm, setMetaForm] = useState(null)
+      const [metaError, setMetaError] = useState('')
+      const [actionBusy, setActionBusy] = useState('')
+
+      const updateCreate = (key, value) => setCreateForm(prev => ({ ...prev, [key]: value }))
+
+      const submitCreate = async () => {
+        setActionBusy('create')
+        setCreateError('')
+        try {
+          const result = await call('createScale', {
+            id: createForm.id.trim(),
+            name: createForm.name.trim(),
+            short: createForm.short.trim(),
+            itemCount: Number(createForm.itemCount),
+            min: Number(createForm.min),
+            max: Number(createForm.max),
+            waves: createForm.waves.split(/[,，\s]+/).map(part => part.trim()).filter(Boolean),
+            scoringType: createForm.scoringType,
+            reverse: createForm.reverse.split(/[,，\s]+/).map(Number).filter(Number.isInteger),
+            minAnswered: createForm.minAnswered ? Number(createForm.minAnswered) : undefined
+          })
+          toast('已新建 ' + result.id + '（' + result.itemCount + ' 题，' + result.waves.join(' / ') + '）')
+          setCreating(false)
+          setCreateForm({ id: '', name: '', short: '', itemCount: '10', min: '1', max: '7', waves: 'T0', scoringType: 'sum', reverse: '', minAnswered: '' })
+          setSelected(result.id)
+          setVersion(value => value + 1)
+          if (refresh) refresh()
+        } catch (err) {
+          setCreateError(err.message)
+        } finally {
+          setActionBusy('')
+        }
+      }
+
+      const startMeta = () => {
+        if (!instrument) return
+        setMetaForm({
+          name: instrument.name,
+          short: instrument.short,
+          version: instrument.version || '',
+          notes: instrument.notes || '',
+          instructions: instrument.instructions || '',
+          scoringType: instrument.scoringType,
+          reverse: instrument.reverse.join('、'),
+          minAnswered: String(instrument.missing ? instrument.missing.minAnswered : ''),
+          multiSub: Object.keys((detail && detail.scoring && detail.scoring.subscales) || {}).length > 1
+        })
+        setMetaError('')
+        setEditingMeta(true)
+      }
+
+      const submitMeta = async () => {
+        if (!instrument || !metaForm) return
+        setActionBusy('meta')
+        setMetaError('')
+        try {
+          const payload = {
+            scale: instrument.id,
+            name: metaForm.name,
+            short: metaForm.short,
+            version: metaForm.version,
+            notes: metaForm.notes,
+            instructions: metaForm.instructions
+          }
+          if (!metaForm.multiSub) {
+            payload.scoringType = metaForm.scoringType
+            payload.reverse = metaForm.reverse.split(/[,，\s]+/).map(Number).filter(Number.isInteger)
+            payload.minAnswered = metaForm.minAnswered ? Number(metaForm.minAnswered) : undefined
+          }
+          await call('saveMeta', payload)
+          toast('已保存 ' + instrument.id + ' 的基本信息')
+          setEditingMeta(false)
+          setVersion(value => value + 1)
+          if (refresh) refresh()
+        } catch (err) {
+          setMetaError(err.message)
+        } finally {
+          setActionBusy('')
+        }
+      }
+
+      const removeScale = async () => {
+        if (!instrument) return
+        if (!window.confirm('确定删除「' + instrument.short + '」？定义文件会删除，流程里引用它的步骤也会一并移除。')) return
+        setActionBusy('delete')
+        setMetaError('')
+        try {
+          const result = await call('deleteScale', { scale: instrument.id })
+          toast('已删除 ' + result.removed + (result.flowRemoved ? '，并从流程移除 ' + result.flowRemoved + ' 步' : ''))
+          setEditingMeta(false)
+          setSelected('')
+          setVersion(value => value + 1)
+          if (refresh) refresh()
+        } catch (err) {
+          setMetaError(err.message)
+        } finally {
+          setActionBusy('')
+        }
+      }
+
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
         h('div', { className: 'sd-card' },
           h('div', { className: 'sd-card-head' },
             h('h3', null, '量表库'),
             h('span', { className: 'sd-note' }, '定义存在 _lab/scales/defs；题面在下面直接编辑，不随插件分发'),
             h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+              h(Btn, {
+                children: creating ? '取消新建' : '新建量表',
+                kind: creating ? 'ghost' : 'primary',
+                small: true,
+                onClick: () => { setCreating(value => !value); setCreateError('') }
+              }),
               Btn({ children: '打开定义文件夹', kind: 'ghost', small: true, onClick: () => onOpenFolder('scales') })
             )
           ),
@@ -376,6 +492,35 @@ window.__ModuleLoader__.load({
             })
           )
         ),
+        creating
+          ? h('div', { className: 'sd-card' },
+              h('div', { className: 'sd-card-head' },
+                h('h3', null, '新建量表'),
+                h('span', { className: 'sd-note' }, '只建定义；题面之后在「编辑题面」里补，或直接粘贴'),
+                h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+                  h(Btn, { children: actionBusy === 'create' ? '保存中…' : '创建', kind: 'primary', small: true, disabled: Boolean(actionBusy), onClick: submitCreate }),
+                  h(Btn, { children: '取消', kind: 'ghost', small: true, disabled: Boolean(actionBusy), onClick: () => setCreating(false) })
+                )
+              ),
+              createError ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, createError) : null,
+              h('div', { className: 'sd-form-grid' },
+                h('label', null, '量表 id', h('input', { className: 'sd-input', value: createForm.id, placeholder: 'MY_SCALE', onChange: event => updateCreate('id', event.target.value) })),
+                h('label', null, '名称', h('input', { className: 'sd-input', value: createForm.name, placeholder: '中文全名', onChange: event => updateCreate('name', event.target.value) })),
+                h('label', null, '简称', h('input', { className: 'sd-input', value: createForm.short, placeholder: '面板与列名用', onChange: event => updateCreate('short', event.target.value) })),
+                h('label', null, '题量', h('input', { className: 'sd-input', type: 'number', min: 1, value: createForm.itemCount, onChange: event => updateCreate('itemCount', event.target.value) })),
+                h('label', null, '取值下限', h('input', { className: 'sd-input', type: 'number', value: createForm.min, onChange: event => updateCreate('min', event.target.value) })),
+                h('label', null, '取值上限', h('input', { className: 'sd-input', type: 'number', value: createForm.max, onChange: event => updateCreate('max', event.target.value) })),
+                h('label', null, '波次（逗号分隔）', h('input', { className: 'sd-input', value: createForm.waves, placeholder: 'T0,T1', onChange: event => updateCreate('waves', event.target.value) })),
+                h('label', null, '计分方式', h('select', { className: 'sd-select', value: createForm.scoringType, onChange: event => updateCreate('scoringType', event.target.value) },
+                  h('option', { value: 'sum' }, '累加'),
+                  h('option', { value: 'mean' }, '均分'),
+                  h('option', { value: 'none' }, '不计分（只收集）')
+                )),
+                h('label', null, '反向题号（逗号分隔）', h('input', { className: 'sd-input', value: createForm.reverse, placeholder: '8,9,10', onChange: event => updateCreate('reverse', event.target.value) })),
+                h('label', null, '缺失门槛（题数）', h('input', { className: 'sd-input', type: 'number', value: createForm.minAnswered, placeholder: '默认 80%', onChange: event => updateCreate('minAnswered', event.target.value) }))
+              )
+            )
+          : null,
         error ? h('div', { className: 'sd-alert sd-alert-bad' }, error) : null,
         instrument && detail
           ? h('div', { className: 'sd-split' },
@@ -383,9 +528,11 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'sd-card' },
                   h('div', { className: 'sd-card-head' },
                     h('h3', null, instrument.short + ' · ' + instrument.name),
-                    h('span', { className: 'sd-note' }, instrument.itemCount + ' 题，' + (instrument.scoringType === 'mean' ? '均分' : '累加')),
-                    h('div', { style: { marginLeft: 'auto' } },
-                      h('span', { className: 'sd-chip' }, instrument.response.min + '–' + instrument.response.max + ' 计分')
+                    h('span', { className: 'sd-note' }, instrument.itemCount + ' 题，' + (instrument.scoringType === 'mean' ? '均分' : instrument.scoringType === 'none' ? '只收集' : '累加')),
+                    h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
+                      h('span', { className: 'sd-chip' }, instrument.response.min + '–' + instrument.response.max + ' 计分'),
+                      h(Btn, { children: editingMeta ? '取消' : '编辑信息', kind: 'outline', small: true, disabled: Boolean(actionBusy), onClick: () => (editingMeta ? setEditingMeta(false) : startMeta()) }),
+                      h(Btn, { children: actionBusy === 'delete' ? '删除中…' : '删除量表', kind: 'ghost', small: true, disabled: Boolean(actionBusy), onClick: removeScale })
                     )
                   ),
                   h('div', { className: 'sd-kv' },
@@ -406,6 +553,58 @@ window.__ModuleLoader__.load({
                       )
                     : null
                 ),
+                editingMeta && metaForm
+                  ? h('div', { className: 'sd-card' },
+                      h('div', { className: 'sd-card-head' },
+                        h('h3', null, '基本信息与计分'),
+                        h('span', { className: 'sd-note' }, metaForm.multiSub ? '多分量表：计分键只能在定义 JSON 里改' : '改完保存会重算 scores.csv'),
+                        h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+                          h(Btn, { children: actionBusy === 'meta' ? '保存中…' : '保存', kind: 'primary', small: true, disabled: Boolean(actionBusy), onClick: submitMeta })
+                        )
+                      ),
+                      metaError ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, metaError) : null,
+                      h('div', { className: 'sd-form-grid' },
+                        h('label', null, '名称', h('input', { className: 'sd-input', value: metaForm.name, onChange: event => setMetaForm(prev => ({ ...prev, name: event.target.value })) })),
+                        h('label', null, '简称', h('input', { className: 'sd-input', value: metaForm.short, onChange: event => setMetaForm(prev => ({ ...prev, short: event.target.value })) })),
+                        h('label', null, '版本', h('input', { className: 'sd-input', value: metaForm.version, onChange: event => setMetaForm(prev => ({ ...prev, version: event.target.value })) })),
+                        metaForm.multiSub
+                          ? null
+                          : h('label', null, '计分方式', h('select', {
+                              className: 'sd-select',
+                              value: metaForm.scoringType,
+                              onChange: event => setMetaForm(prev => ({ ...prev, scoringType: event.target.value }))
+                            },
+                              h('option', { value: 'sum' }, '累加'),
+                              h('option', { value: 'mean' }, '均分'),
+                              h('option', { value: 'none' }, '不计分（只收集）')
+                            )),
+                        metaForm.multiSub
+                          ? null
+                          : h('label', null, '反向题号（逗号分隔）', h('input', { className: 'sd-input', value: metaForm.reverse, onChange: event => setMetaForm(prev => ({ ...prev, reverse: event.target.value })) })),
+                        metaForm.multiSub
+                          ? null
+                          : h('label', null, '缺失门槛（题数）', h('input', { className: 'sd-input', type: 'number', value: metaForm.minAnswered, onChange: event => setMetaForm(prev => ({ ...prev, minAnswered: event.target.value })) }))
+                      ),
+                      h('label', { style: { display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--sd-text2)' } },
+                        '计分说明',
+                        h('textarea', {
+                          className: 'sd-input',
+                          style: { height: 54, padding: 6, resize: 'vertical', fontSize: 11.5 },
+                          value: metaForm.notes,
+                          onChange: event => setMetaForm(prev => ({ ...prev, notes: event.target.value }))
+                        })
+                      ),
+                      h('label', { style: { display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--sd-text2)' } },
+                        '指导语',
+                        h('textarea', {
+                          className: 'sd-input',
+                          style: { height: 72, padding: 6, resize: 'vertical', fontSize: 11.5 },
+                          value: metaForm.instructions,
+                          onChange: event => setMetaForm(prev => ({ ...prev, instructions: event.target.value }))
+                        })
+                      )
+                    )
+                  : null,
                 h('div', { className: 'sd-card' },
                   h('div', { className: 'sd-card-head' },
                     h('h3', null, '题目与反向标记'),
@@ -1230,6 +1429,143 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function ReviewPanel({ data, toast, refresh }) {
+      const [scaleId, setScaleId] = useState(data.instruments[0] ? data.instruments[0].id : '')
+      const instrument = data.instruments.find(item => item.id === scaleId) || data.instruments[0]
+      const [wave, setWave] = useState(instrument ? instrument.waves[0] : 'T0')
+      const [rows, setRows] = useState([])
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const [drafts, setDrafts] = useState({})
+
+      useEffect(() => {
+        if (!instrument) return
+        if (!instrument.waves.includes(wave)) setWave(instrument.waves[0])
+      }, [scaleId])
+
+      const load = useCallback(async () => {
+        if (!instrument) return
+        setBusy('load')
+        setError('')
+        try {
+          const result = await call('answers', { scale: instrument.id, wave })
+          setRows(result.rows || [])
+          setDrafts({})
+        } catch (err) {
+          setError(err.message)
+          setRows([])
+        } finally {
+          setBusy('')
+        }
+      }, [instrument && instrument.id, wave])
+
+      useEffect(() => { load() }, [load])
+
+      const act = async (action, payload, done) => {
+        setBusy(action)
+        setError('')
+        try {
+          const result = await call(action, payload)
+          toast(done(result))
+          await load()
+          if (refresh) refresh()
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const rename = index => {
+        const row = rows.find(item => item.index === index)
+        const to = (drafts[index] !== undefined ? drafts[index] : row ? row.id : '').trim()
+        if (!to) return
+        act('renameAnswer', { scale: instrument.id, wave, index, to },
+          result => '已把第 ' + (index + 1) + ' 行的编号 ' + result.from + ' 改成 ' + result.to)
+      }
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+        h('div', { className: 'sd-card' },
+          h('div', { className: 'sd-card-head' },
+            h('h3', null, '核对与修正'),
+            h('span', { className: 'sd-note' }, '改错编号、删掉多录的、重复编号里留一份；改完自动重算'),
+            h('div', { style: { marginLeft: 'auto' } },
+              h(Btn, { children: busy === 'load' ? '读取中…' : '刷新', kind: 'ghost', small: true, disabled: Boolean(busy), onClick: load })
+            )
+          ),
+          h('div', { className: 'sd-field' },
+            h('label', null, '量表'),
+            h('select', {
+              className: 'sd-select',
+              value: instrument ? instrument.id : '',
+              onChange: event => { setScaleId(event.target.value); setRows([]) }
+            }, data.instruments.map(item => h('option', { key: item.id, value: item.id }, item.short + '（' + item.itemCount + ' 题）'))),
+            h('label', null, '波次'),
+            h('select', {
+              className: 'sd-select',
+              style: { maxWidth: 140 },
+              value: wave,
+              onChange: event => setWave(event.target.value)
+            }, (instrument ? instrument.waves : []).map(item => h('option', { key: item, value: item }, waveName(item)))),
+            h('span', { className: 'sd-note' }, rows.length + ' 份')
+          ),
+          error ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, error) : null,
+          rows.length
+            ? h('div', { className: 'sd-table-wrap' },
+                h('table', { className: 'sd-table', style: { minWidth: 640 } },
+                  h('thead', null, h('tr', null,
+                    h('th', null, '#'),
+                    h('th', null, '编号'),
+                    h('th', { className: 'is-score' }, '已答'),
+                    h('th', { className: 'is-score' }, '缺'),
+                    h('th', null, '重复'),
+                    h('th', null, '操作')
+                  )),
+                  h('tbody', null, rows.map(row => h('tr', { key: row.index },
+                    h('td', { className: 'sd-note' }, String(row.index + 1)),
+                    h('td', null, h('input', {
+                      className: 'sd-input sd-id-input',
+                      value: drafts[row.index] !== undefined ? drafts[row.index] : row.id,
+                      onChange: event => setDrafts(prev => ({ ...prev, [row.index]: event.target.value.replace(/[^\d]/g, '').slice(0, 5) })),
+                      onKeyDown: event => { if (event.key === 'Enter') rename(row.index) }
+                    })),
+                    h('td', { className: 'is-score' }, String(row.answered)),
+                    h('td', { className: 'is-score' }, row.missing ? String(row.missing) : ''),
+                    h('td', null, row.copies > 1
+                      ? h('span', { className: 'sd-badge sd-badge-bad' }, row.copies + ' 份')
+                      : h('span', { className: 'sd-note' }, '')),
+                    h('td', null, h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                      h(Btn, { children: '改编号', kind: 'outline', small: true, disabled: Boolean(busy), onClick: () => rename(row.index) }),
+                      row.copies > 1
+                        ? h(Btn, {
+                            children: '保留这份',
+                            kind: 'primary',
+                            small: true,
+                            disabled: Boolean(busy),
+                            onClick: () => act('keepAnswer', { scale: instrument.id, wave, index: row.index },
+                              result => '保留 ' + result.id + ' 的这份，删掉其余 ' + result.removed + ' 份')
+                          })
+                        : null,
+                      h(Btn, {
+                        children: '删除',
+                        kind: 'ghost',
+                        small: true,
+                        disabled: Boolean(busy),
+                        onClick: () => {
+                          if (!window.confirm('删除第 ' + (row.index + 1) + ' 行（编号 ' + row.id + '）？')) return
+                          act('deleteAnswerRow', { scale: instrument.id, wave, index: row.index },
+                            result => '已删除 ' + result.id + ' 的这份，剩 ' + result.remaining + ' 份')
+                        }
+                      })
+                    ))
+                  )))
+                )
+              )
+            : h(Empty, { title: busy === 'load' ? '读取中…' : '这一波次还没有作答' }, '先导入或手填，再回来核对。')
+        )
+      )
+    }
+
     function EntryTab({ data, toast, refresh, initial }) {
       const [mode, setMode] = useState('sheet')
       const [busy, setBusy] = useState('')
@@ -1257,11 +1593,14 @@ window.__ModuleLoader__.load({
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
         h('div', { className: 'sd-tabs', style: { margin: 0 } },
           h('button', { type: 'button', className: 'sd-tab' + (mode === 'sheet' ? ' is-active' : ''), onClick: () => setMode('sheet') }, '手填答题纸'),
-          h('button', { type: 'button', className: 'sd-tab' + (mode === 'import' ? ' is-active' : ''), onClick: () => setMode('import') }, '导入导出文件')
+          h('button', { type: 'button', className: 'sd-tab' + (mode === 'import' ? ' is-active' : ''), onClick: () => setMode('import') }, '导入导出文件'),
+          h('button', { type: 'button', className: 'sd-tab' + (mode === 'review' ? ' is-active' : ''), onClick: () => setMode('review') }, '核对与修正')
         ),
         mode === 'sheet'
           ? h(SheetEntry, { data, busy: Boolean(busy), onSave: save, onClear: clear, toast, initial })
-          : h(ImportPanel, { data, toast, onImported: refresh })
+          : mode === 'import'
+            ? h(ImportPanel, { data, toast, onImported: refresh })
+            : h(ReviewPanel, { data, toast, refresh })
       )
     }
 
@@ -1281,7 +1620,8 @@ window.__ModuleLoader__.load({
           const cell = row.cells[col.key]
           return filter === 'incomplete' ? cell && cell.status === 'incomplete'
             : filter === 'prorated' ? cell && cell.status === 'prorated'
-              : cell && cell.status === 'absent'
+              : filter === 'duplicate' ? cell && cell.status === 'duplicate'
+                : cell && cell.status === 'absent'
         })
       })
 
@@ -1327,7 +1667,8 @@ window.__ModuleLoader__.load({
               h('option', { value: ALL }, '全部 ' + data.scores.rows.length),
               h('option', { value: 'incomplete' }, '有未计分'),
               h('option', { value: 'prorated' }, '有折算'),
-              h('option', { value: 'absent' }, '有整份未录')
+              h('option', { value: 'absent' }, '有整份未录'),
+              h('option', { value: 'duplicate' }, '有重复编号')
             )
           ),
           shown.length
@@ -1366,14 +1707,15 @@ window.__ModuleLoader__.load({
                         const isMissing = col.kind === 'missing'
                         const empty = !cell || cell.value === null || cell.value === undefined
                         const bad = cell && cell.status === 'incomplete'
+                        const duplicate = cell && cell.status === 'duplicate'
                         return h('td', {
                           key: col.key,
                           className: 'is-score',
                           style: index === 0 ? { borderLeft: '1px solid var(--sd-line2)' } : undefined,
                           title: col.key + '：' + (STATUS_TEXT[cell ? cell.status : 'absent'] || '')
                         },
-                          h('span', { className: 'sd-cell' + (bad ? ' is-bad' : '') + (empty ? ' is-empty' : '') },
-                            isMissing ? (empty ? '—' : String(cell.value)) : scoreText(cell ? cell.value : null),
+                          h('span', { className: 'sd-cell' + (bad || duplicate ? ' is-bad' : '') + (empty && !duplicate ? ' is-empty' : '') },
+                            duplicate ? '重复' : isMissing ? (empty ? '—' : String(cell.value)) : scoreText(cell ? cell.value : null),
                             bad ? h('i', null, '!') : null
                           )
                         )
@@ -1414,7 +1756,7 @@ window.__ModuleLoader__.load({
               )
             )
             : h(Empty, { title: '还没有分数' }, '先在「录入」里手填，或导入问卷平台导出。'),
-          h('div', { className: 'sd-note' }, '列名规则：单分量表用 量表_波次，多分量表用 量表_波次_分量表；每个波次另有一列「缺题」。导出文件在 _lab/scores.csv 与 _lab/scores_detail.csv。')
+          h('div', { className: 'sd-note' }, '列名规则：单分量表用 量表_波次，多分量表用 量表_波次_分量表；每个波次另有一列「缺题」。分数在 _lab/scores.csv，每题明细在 scores_detail.csv，分数与题目合并的宽表在 data_wide.csv。')
         )
       )
     }
