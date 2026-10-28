@@ -18,8 +18,10 @@ import {
   detailCsv,
   wideCsv,
   guessTarget,
+  headerCode,
   mapImportColumns,
   normalizeDef,
+  normalizeId,
   parseItemTextTable,
   parseTable,
   parseValue,
@@ -345,6 +347,31 @@ test('QuestionPro header: the participant column wins over Response ID', () => {
   assert.equal(mapping.idColumn, 't2_participant_id')
   assert.equal(mapping.matched, 10)
   assert.equal(mapping.unmatched.length, 0)
+})
+
+test('QuestionPro bracket codes: a repeated [t1_ftps] group maps item by item', () => {
+  const def = byId('FTPS')
+  const header = [
+    'Response ID',
+    'Respondent Email',
+    '[t1_participant_id] 您的编号：（仅数字）',
+    ...Array.from({ length: 10 }, (_, i) => `[t1_ftps] ${i + 1}. 题目文字`)
+  ]
+  assert.equal(headerCode(header[3]), 't1_ftps')
+  const mapping = mapImportColumns(def, 'T1', header)
+  assert.equal(mapping.idColumn, '[t1_participant_id] 您的编号：（仅数字）')
+  assert.equal(mapping.matched, 10)
+  assert.deepEqual(mapping.items.map(item => item.column), header.slice(3))
+
+  const guess = guessTarget(defs, header, 'QuestionPro-SR-RawData-4114068.xlsx')
+  assert.equal(guess.scale, 'FTPS')
+  assert.equal(guess.wave, 'T1')
+})
+
+test('numeric ids coming out of Excel lose the .0 suffix', () => {
+  assert.equal(normalizeId('11002.0'), '11002')
+  assert.equal(normalizeId(11002), '11002')
+  assert.equal(normalizeId('21001'), '21001')
 })
 
 test('choice and text items keep raw answers without scoring', () => {

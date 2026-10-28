@@ -268,6 +268,7 @@ specs.push(
     waves: ['imagery'],
     itemCount: 10,
     response: { min: 1, max: 7, labels: {} },
+    codes: { imagery: Array.from({ length: 10 }, () => 'eva_process') },
     notes: '完成想象/回忆后立刻评定，7 点（1–7）；各题锚点不同，题面里自带。不计分。'
   }),
   unscored({

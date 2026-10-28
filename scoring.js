@@ -117,7 +117,10 @@ export function normalizeCode(value) {
 }
 
 export function normalizeId(value) {
-  return String(value === null || value === undefined ? '' : value).trim().replace(/^["']|["']$/g, '')
+  const text = String(value === null || value === undefined ? '' : value).trim().replace(/^["']|["']$/g, '')
+  // Excel hands numeric ids back as 11002.0
+  const numeric = /^(\d+)\.0+$/.exec(text)
+  return numeric ? numeric[1] : text
 }
 
 /** A subject id in this study is five digits, two of which encode the cell. */
@@ -380,7 +383,8 @@ export function validateDefinition(def) {
     if (codes.length !== def.itemCount) {
       list.push(issue('warn', 'definition', `${wave} 导出码 ${codes.length} 个，题量 ${def.itemCount}`, { wave }))
     }
-    if (new Set(codes).size !== codes.length) list.push(issue('bad', 'definition', `${wave} 导出码有重复`, { wave }))
+    // Repeated codes are normal for matrix exports (QuestionPro repeats the
+    // parent question code on every row), so duplicates are not an error.
   }
 
   return list
@@ -745,12 +749,17 @@ const STRONG_ID_ALIASES = [
 const WEAK_ID_ALIASES = ['id', 'responseid', 'responseidentifier', 'externalreference']
 
 function findIdColumn(header, rows) {
-  const normalized = header.map(normalizeCode)
+  const normalized = header.map(name => normalizeCode(headerCode(name)))
   for (const alias of STRONG_ID_ALIASES) {
     const at = normalized.indexOf(normalizeCode(alias))
     if (at >= 0) return { column: header[at], how: 'alias' }
   }
-  const fuzzy = header.findIndex(name => /编号|participant|respondent|subject/i.test(String(name)))
+  // QuestionPro names the participant question `t1_participant_id` and also
+  // exports `Respondent Email` / `Response ID`; prefer the participant one.
+  const isEmail = name => /email/i.test(String(name))
+  const participant = normalized.findIndex((name, at) => !isEmail(header[at]) && /participant|编号|subjectid/.test(name))
+  if (participant >= 0) return { column: header[participant], how: 'fuzzy' }
+  const fuzzy = header.findIndex(name => !isEmail(name) && /编号|participant|respondent|subject/i.test(String(name)))
   if (fuzzy >= 0) return { column: header[fuzzy], how: 'fuzzy' }
   for (const alias of WEAK_ID_ALIASES) {
     const at = normalized.indexOf(normalizeCode(alias))
@@ -768,20 +777,57 @@ function findIdColumn(header, rows) {
   return { column: null, how: null }
 }
 
+/**
+ * QuestionPro puts the question code in brackets and repeats it for every row
+ * of a matrix: `[t1_ftps] 1. …`, `[t1_ftps] 2. …`. Extract that code; fall back
+ * to the header text itself.
+ */
+export function headerCode(name) {
+  const text = String(name === null || name === undefined ? '' : name).trim()
+  const match = /^\[([^\]]+)\]/.exec(text)
+  return match ? match[1].trim() : text
+}
+
 function itemColumnCandidates(def, wave, header) {
   const codes = def.codes[wave] || []
   const normalized = header.map(normalizeCode)
+  const headerCodes = header.map(headerCode)
+  const normalizedCodes = headerCodes.map(normalizeCode)
   const claimed = new Set()
+
+  // Group columns by their bracket code so repeated matrix codes keep order.
+  const groups = new Map()
+  headerCodes.forEach((code, at) => {
+    const key = normalizeCode(code)
+    if (!key) return
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(at)
+  })
+
   const items = []
   for (const item of def.items) {
     const code = codes[item.no - 1] || ''
     let column = null
     let how = null
     if (code) {
-      let at = header.findIndex(name => String(name).trim() === code)
-      if (at < 0) at = normalized.indexOf(normalizeCode(code))
-      if (at < 0) at = header.findIndex(name => normalizeCode(name).includes(normalizeCode(code)))
-      if (at >= 0 && !claimed.has(at)) {
+      const key = normalizeCode(code)
+      // 1. exact bracket code (may repeat for every row of a matrix);
+      // 2. a per-item code such as `t1_ftps_03` against a `[t1_ftps]` group;
+      // 3. a header that merely contains the code.
+      let candidates = groups.get(key) || []
+      if (!candidates.length) {
+        const ordinal = /^(.*?)(\d{1,3})$/.exec(String(code).trim())
+        if (ordinal) {
+          const base = groups.get(normalizeCode(ordinal[1]))
+          const index = Number(ordinal[2]) - 1
+          if (base && index >= 0 && index < base.length) candidates = [base[index]]
+        }
+      }
+      if (!candidates.length) {
+        candidates = header.map((name, at) => at).filter(at => normalized[at].includes(key))
+      }
+      const at = candidates.find(index => !claimed.has(index))
+      if (at !== undefined) {
         column = header[at]
         how = 'code'
         claimed.add(at)
@@ -837,7 +883,7 @@ export function mapImportColumns(def, wave, header, rows) {
 
 /** Best (scale, wave) guess for a file, from its header codes first, name second. */
 export function guessTarget(defs, header, filename = '') {
-  const names = (header || []).map(name => normalizeCode(name))
+  const names = (header || []).map(name => normalizeCode(headerCode(name)))
   const fileNorm = normalizeCode(filename)
   let best = null
   for (const def of defs) {

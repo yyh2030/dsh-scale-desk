@@ -29,7 +29,9 @@ def pick_sheet(workbook):
 
 
 def main(path):
-    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    # Normal mode: QuestionPro's workbook metadata makes read_only report a
+    # one-row sheet, which would silently drop every response.
+    workbook = openpyxl.load_workbook(path, data_only=True)
     try:
         sheet = pick_sheet(workbook)
         buffer = io.StringIO()
@@ -41,7 +43,7 @@ def main(path):
             if all(str(value).strip() == '' for value in values):
                 continue
             writer.writerow([str(value) if not isinstance(value, str) else value for value in values])
-        payload = {'sheet': sheet.title, 'csv': buffer.getvalue()}
+        payload = {'sheet': sheet.title, 'csv': buffer.getvalue(), 'rows': sheet.max_row}
     finally:
         workbook.close()
     sys.stdout.reconfigure(encoding='utf-8')
