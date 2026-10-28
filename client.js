@@ -841,12 +841,12 @@ window.__ModuleLoader__.load({
 
       const groups = useMemo(() => {
         const byScale = new Map()
-        for (const col of scoreCols) {
+        for (const col of columns) {
           if (!byScale.has(col.scale)) byScale.set(col.scale, [])
           byScale.get(col.scale).push(col)
         }
         return [...byScale.entries()]
-      }, [scoreCols])
+      }, [columns])
 
       // One drill-down button per scale × wave, not per column.
       const units = useMemo(() => {

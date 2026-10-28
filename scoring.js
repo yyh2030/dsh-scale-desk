@@ -748,6 +748,10 @@ export function applyImport(def, wave, table, mapping) {
     for (const [no, at] of columns.entries()) {
       values[no] = String(cells[at] ?? '').trim()
     }
+    if (!Object.values(values).some(value => value !== '')) {
+      issues.push(issue('info', 'import', `第 ${line} 行只有编号、整行空白，已跳过`, { line, id }))
+      return
+    }
     if (seen.has(id)) {
       issues.push(issue('warn', 'import', `编号 ${id} 重复出现（第 ${seen.get(id).line}、${line} 行），保留后一行`, { line, id }))
       seen.get(id).values = values
