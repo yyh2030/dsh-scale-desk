@@ -673,6 +673,52 @@ export function apply(ctx, config = {}) {
       }
     },
 
+    /**
+     * Edit the wave list of one scale: add a stage, drop one that never got data,
+     * or change the export-code prefix. A wave that already has answers cannot be
+     * renamed or removed, because the answers file and the score column both hang
+     * off that name.
+     */
+    async saveWaves(payload) {
+      const current = await model(false)
+      const def = findDef(current, String(payload && payload.scale))
+      const incoming = Array.isArray(payload && payload.waves) ? payload.waves : []
+      const names = []
+      const codes = {}
+      for (const entry of incoming) {
+        const name = String((entry && entry.name) || '').trim()
+        if (!name) throw new RouteError('invalid', '波次名不能为空')
+        if (!/^[A-Za-z0-9._-]{1,24}$/.test(name)) {
+          throw new RouteError('invalid', `波次名「${name}」只能用字母、数字和 . _ -（它同时是文件名和列名的一部分）`)
+        }
+        if (names.includes(name)) throw new RouteError('invalid', `波次名 ${name} 重复`)
+        names.push(name)
+        const prefix = String((entry && entry.prefix) || '').trim()
+        if (!prefix) continue
+        if (!/^[A-Za-z0-9._-]{1,40}$/.test(prefix)) {
+          throw new RouteError('invalid', `导出码前缀「${prefix}」只能用字母、数字和 . _ -`)
+        }
+        const width = Math.max(2, String(def.itemCount).length)
+        codes[name] = Array.from({ length: def.itemCount }, (_, index) => `${prefix}${String(index + 1).padStart(width, '0')}`)
+      }
+      if (!names.length) throw new RouteError('invalid', '至少保留一个波次')
+
+      const withData = current.answerFiles.filter(file => file.scale === def.id && (file.rows || []).length)
+      for (const file of withData) {
+        if (!names.includes(file.wave)) {
+          throw new RouteError('invalid', `${def.short} 的 ${file.wave} 已有 ${file.rows.length} 份作答，不能删除或改名；要改先把那一波次的作答导出或删掉`)
+        }
+      }
+
+      const raw = JSON.parse(await readFile(def.file, 'utf8'))
+      raw.waves = names
+      raw.codes = codes
+      await writeFileAtomic(def.file, JSON.stringify(raw, null, 2) + '\n')
+      invalidate()
+      await syncScores()
+      return { scale: def.id, waves: names, coded: Object.keys(codes).length }
+    },
+
     async answer(payload) {
       const current = await model(false)
       const def = findDef(current, String(payload && payload.scale))

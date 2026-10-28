@@ -286,6 +286,65 @@ window.__ModuleLoader__.load({
         }
       }, [draft, selected, toast, refresh])
 
+      const [wavesEditing, setWavesEditing] = useState(false)
+      const [wavesDraft, setWavesDraft] = useState([])
+      const [waveError, setWaveError] = useState('')
+      const [waveBusy, setWaveBusy] = useState('')
+
+      const wavePrefix = list => {
+        const first = (list || [])[0]
+        return first ? String(first).replace(/\d+$/, '') : ''
+      }
+      const waveRows = detail
+        ? detail.waves.map(name => ({ name, prefix: wavePrefix(detail.codes[name]) }))
+        : []
+
+      const startWaves = () => {
+        setWavesDraft(waveRows.map(row => ({ ...row })))
+        setWaveError('')
+        setWavesEditing(true)
+      }
+      const addWave = () => {
+        setWavesDraft(prev => {
+          const numbers = prev.map(row => /^T(\d+)$/.exec(row.name)).filter(Boolean).map(match => Number(match[1]))
+          const next = numbers.length ? Math.max(...numbers) + 1 : prev.length
+          const name = numbers.length ? 'T' + next : ''
+          const prefix = numbers.length ? 't' + next + '_' : ''
+          return [...prev, { name, prefix }]
+        })
+      }
+      const saveWaves = async () => {
+        const names = wavesDraft.map(row => row.name.trim())
+        if (!names.length) {
+          setWaveError('至少保留一个波次')
+          return
+        }
+        if (names.some(name => !name)) {
+          setWaveError('波次名不能为空')
+          return
+        }
+        if (new Set(names).size !== names.length) {
+          setWaveError('波次名重复')
+          return
+        }
+        setWaveBusy('save')
+        setWaveError('')
+        try {
+          const result = await call('saveWaves', {
+            scale: selected,
+            waves: wavesDraft.map(row => ({ name: row.name.trim(), prefix: row.prefix.trim() }))
+          })
+          setWavesEditing(false)
+          toast('已保存 ' + result.scale + ' 的波次：' + result.waves.join(' / '))
+          setVersion(value => value + 1)
+          if (refresh) refresh()
+        } catch (err) {
+          setWaveError(err.message)
+        } finally {
+          setWaveBusy('')
+        }
+      }
+
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
         h('div', { className: 'sd-card' },
           h('div', { className: 'sd-card-head' },
@@ -442,6 +501,74 @@ window.__ModuleLoader__.load({
                 )
               ),
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 } },
+                h('div', { className: 'sd-card' },
+                  h('div', { className: 'sd-card-head' },
+                    h('h3', null, '波次与导出码'),
+                    h('span', { className: 'sd-note' }, wavesEditing ? '已有作答的波次不能改名或删除' : detail.waves.map(waveName).join(' / ')),
+                    h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+                      wavesEditing
+                        ? [
+                            h(Btn, { key: 'add', children: '添加波次', kind: 'ghost', small: true, disabled: Boolean(waveBusy), onClick: addWave }),
+                            h(Btn, { key: 'save', children: waveBusy === 'save' ? '保存中…' : '保存波次', kind: 'primary', small: true, disabled: Boolean(waveBusy), onClick: saveWaves }),
+                            h(Btn, {
+                              key: 'cancel',
+                              children: '取消',
+                              kind: 'ghost',
+                              small: true,
+                              disabled: Boolean(waveBusy),
+                              onClick: () => { setWavesEditing(false); setWaveError('') }
+                            })
+                          ]
+                        : h(Btn, { children: '编辑波次', kind: 'outline', small: true, onClick: startWaves })
+                    )
+                  ),
+                  waveError ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, waveError) : null,
+                  h('div', { className: 'sd-matrix' },
+                    (wavesEditing ? wavesDraft : waveRows).map((row, index) => {
+                      const recorded = ((instrument.data || {})[row.name] || {}).rows || 0
+                      return h('div', {
+                        className: 'sd-item-row',
+                        key: index,
+                        style: { gridTemplateColumns: '92px minmax(0,1fr) auto' }
+                      },
+                        wavesEditing
+                          ? h('input', {
+                              className: 'sd-input',
+                              style: { height: 26, fontSize: 11.5, width: 84 },
+                              value: row.name,
+                              placeholder: 'T3',
+                              onChange: event => setWavesDraft(prev => prev.map((entry, at) => at === index ? { ...entry, name: event.target.value } : entry))
+                            })
+                          : h('span', { className: 'sd-item-no' }, row.name),
+                        wavesEditing
+                          ? h('input', {
+                              className: 'sd-text-input',
+                              value: row.prefix,
+                              placeholder: '导出码前缀，如 t3_ftps_',
+                              onChange: event => setWavesDraft(prev => prev.map((entry, at) => at === index ? { ...entry, prefix: event.target.value } : entry))
+                            })
+                          : h('span', { className: 'sd-note' }, row.prefix
+                              ? row.prefix + '01 … ' + row.prefix + String(instrument.itemCount).padStart(2, '0')
+                              : '无导出码，导入时按列名 / 题号匹配'),
+                        h('span', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                          h('span', { className: 'sd-chip' }, recorded + ' 份'),
+                          wavesEditing && recorded === 0
+                            ? h('button', {
+                                type: 'button',
+                                className: 'sd-chip',
+                                style: { cursor: 'pointer', height: 22 },
+                                title: '删除这个波次',
+                                onClick: () => setWavesDraft(prev => prev.filter((_, at) => at !== index))
+                              }, '删除')
+                            : null
+                        )
+                      )
+                    })
+                  ),
+                  h('div', { className: 'sd-note' }, wavesEditing
+                    ? '波次名会进文件名与分数列名；导出码由前缀加 01…NN 自动生成，与题量对齐。'
+                    : '同一份量表在多个阶段测，就是同一份定义下多个波次；点「编辑波次」增删。')
+                ),
                 h('div', { className: 'sd-card' },
                   h('div', { className: 'sd-card-head' }, h('h3', null, '计分键')),
                   detail.scoring.subscales.map(sub => h('div', { key: sub.key, style: { display: 'flex', flexDirection: 'column', gap: 2 } },

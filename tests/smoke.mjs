@@ -190,5 +190,45 @@ assert.equal(statusAfter.instruments.find(item => item.id === 'FTPS').items[0].t
 
 await assert.rejects(request(handler, 'POST', 'saveTexts', { scale: 'FTPS', items: [{ no: 99, text: 'x' }] }))
 
+/* 12. waves: add a stage, see its column, then remove it again --------------- */
+const addedWave = await request(handler, 'POST', 'saveWaves', {
+  scale: 'FTPS',
+  waves: [
+    { name: 'T0', prefix: 't0_ftps_' },
+    { name: 'T1', prefix: 't1_ftps_' },
+    { name: 'T2', prefix: 't2_ftps_' },
+    { name: 'T3', prefix: 't3_ftps_' }
+  ]
+})
+assert.deepEqual(addedWave.waves, ['T0', 'T1', 'T2', 'T3'])
+let waveStatus = await request(handler, 'GET', 'status')
+assert.ok(waveStatus.instruments.find(item => item.id === 'FTPS').waves.includes('T3'))
+assert.ok(waveStatus.scores.columns.some(col => col.key === 'FTPS_T3'))
+const ftpsWithT3 = JSON.parse(await readFile(path.join(labDir, 'scales', 'defs', 'FTPS.json'), 'utf8'))
+assert.equal(ftpsWithT3.codes.T3.length, 10)
+assert.equal(ftpsWithT3.codes.T3[0], 't3_ftps_01')
+
+await request(handler, 'POST', 'saveWaves', {
+  scale: 'FTPS',
+  waves: [
+    { name: 'T0', prefix: 't0_ftps_' },
+    { name: 'T1', prefix: 't1_ftps_' },
+    { name: 'T2', prefix: 't2_ftps_' }
+  ]
+})
+waveStatus = await request(handler, 'GET', 'status')
+assert.ok(!waveStatus.scores.columns.some(col => col.key === 'FTPS_T3'))
+
+// A wave that already holds answers refuses to vanish.
+await assert.rejects(
+  request(handler, 'POST', 'saveWaves', { scale: 'STAI_S', waves: [{ name: 'T2', prefix: 't2_stais_' }] }),
+  /已有 2 份作答/
+)
+assert.ok((await request(handler, 'GET', 'status')).instruments.find(item => item.id === 'FTPS').waves.includes('T2'))
+assert.deepEqual(
+  (await request(handler, 'GET', 'status')).instruments.find(item => item.id === 'STAI_S').waves,
+  ['T0', 'T2']
+)
+
 await rm(root, { recursive: true, force: true })
-console.log('smoke ok: seed → import → manual entry → score → validate → export → tools → item texts')
+console.log('smoke ok: seed → import → manual entry → score → validate → export → tools → item texts → waves')
