@@ -1976,7 +1976,15 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = useState('')
       const [detailRow, setDetailRow] = useState(null)
       const [filter, setFilter] = useState(ALL)
-      const columns = data.scores.columns
+      const [onlyScored, setOnlyScored] = useState(true)
+      const allColumns = data.scores.columns
+      const shortOf = scale => (data.instruments.find(item => item.id === scale) || {}).short || scale
+      const isUnscored = scale => {
+        const instrument = data.instruments.find(item => item.id === scale)
+        return instrument ? instrument.scoringType === 'none' : false
+      }
+      const hiddenCount = allColumns.filter(col => isUnscored(col.scale)).length
+      const columns = onlyScored ? allColumns.filter(col => !isUnscored(col.scale)) : allColumns
       const scoreCols = columns.filter(col => col.kind === 'score')
       const shown = data.scores.rows.filter(row => {
         if (filter === ALL) return true
@@ -2020,7 +2028,9 @@ window.__ModuleLoader__.load({
             h('span', null, '折算 = 缺了几题，按已答的题平均补上'),
             h('span', null, '! = 缺太多，没算分'),
             h('span', null, '重复 = 同一编号有多份，先去「录入 → 核对」留一份'),
-            h('span', null, '— = 这个阶段还没有他的作答')
+            h('span', null, '— = 这个阶段还没有他的作答'),
+            h('span', null, '缺题 = 这一阶段没答的题数；0 表示一题没缺，不是 0 分'),
+            h('span', null, '只收集不计分的问卷（AI 元问卷、事后问卷等）没有分数列，只有缺题列')
           ),
           h('details', { className: 'sd-details' },
             h('summary', null, '每一列是什么（点开对照）'),
@@ -2053,6 +2063,11 @@ window.__ModuleLoader__.load({
               h('option', { value: 'prorated' }, '有折算'),
               h('option', { value: 'absent' }, '有整份未录'),
               h('option', { value: 'duplicate' }, '有重复编号')
+            ),
+            h('label', { style: { marginLeft: 12, display: 'inline-flex', gap: 4, alignItems: 'center' } },
+              h('input', { type: 'checkbox', checked: onlyScored, onChange: event => setOnlyScored(event.target.checked) }),
+              '只看计分量表',
+              h('span', { className: 'sd-note' }, onlyScored ? '（已隐藏 ' + hiddenCount + ' 列只收集不计分的缺题列）' : '')
             )
           ),
           shown.length
@@ -2061,7 +2076,7 @@ window.__ModuleLoader__.load({
                   h('thead', null,
                     h('tr', null,
                       h('th', { className: 'sd-sticky', rowSpan: 2 }, '编号'),
-                      groups.map(([scale, cols]) => h('th', { key: scale, colSpan: cols.length, style: { textAlign: 'center', borderLeft: '1px solid var(--sd-line2)' } }, scale))
+                      groups.map(([scale, cols]) => h('th', { key: scale, colSpan: cols.length, title: scale, style: { textAlign: 'center', borderLeft: '1px solid var(--sd-line2)' } }, shortOf(scale)))
                     ),
                     h('tr', null,
                       groups.flatMap(([scale, cols]) => cols.map((col, index) => h('th', {
