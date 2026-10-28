@@ -36,15 +36,15 @@
       "text": "",
       "options": [
         {
-          "value": "A",
+          "value": "1",
           "label": "从未吸烟"
         },
         {
-          "value": "B",
+          "value": "2",
           "label": "已戒烟"
         },
         {
-          "value": "C",
+          "value": "3",
           "label": "正在吸烟"
         }
       ]
@@ -217,11 +217,11 @@
       "text": "",
       "options": [
         {
-          "value": "A",
+          "value": "1",
           "label": "否，目前未服用任何药物或补剂"
         },
         {
-          "value": "B",
+          "value": "2",
           "label": "是，目前正在服用"
         }
       ]

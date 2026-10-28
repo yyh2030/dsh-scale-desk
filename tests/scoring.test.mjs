@@ -368,6 +368,26 @@ test('QuestionPro bracket codes: a repeated [t1_ftps] group maps item by item', 
   assert.equal(guess.wave, 'T1')
 })
 
+test('a shared code is not stolen from the id column', () => {
+  const def = byId('BODY_STATE')
+  const header = [
+    '[Q4] 您的编号：（仅数字）',
+    '[Q4] 在过去一年中，您的饮酒频率为：',
+    '[Q5] 在过去一年中，您的吸烟频率为：',
+    '[Q6] 您的戒烟时长为：',
+    '[Q7] 您目前吸烟的频率为：',
+    '[Q8] 咖啡因摄入频率：',
+    '[Q9] 运动频率：',
+    '[Q10] 饮食规律性：',
+    '[Q11] 睡眠质量：',
+    '[Q12] 是否在服用药物或补剂：',
+    '[Q13] 请填写具体类型或药物名称：'
+  ]
+  const mapping = mapImportColumns(def, 'ts', header)
+  assert.equal(mapping.idColumn, header[0])
+  assert.equal(mapping.items[0].column, header[1], 'Q4 appears twice; the item takes the second one')
+})
+
 test('numeric ids coming out of Excel lose the .0 suffix', () => {
   assert.equal(normalizeId('11002.0'), '11002')
   assert.equal(normalizeId(11002), '11002')
@@ -378,12 +398,12 @@ test('choice and text items keep raw answers without scoring', () => {
   const def = byId('BODY_STATE')
   const result = scoreAnswers(def, {
     1: '3',
-    2: 'B',
+    2: '2',
     5: '1',
     6: '2',
     7: '4',
     8: '5',
-    9: 'B',
+    9: '2',
     10: '维生素D 1000IU'
   })
   assert.equal(result.answered, 8)
@@ -392,7 +412,7 @@ test('choice and text items keep raw answers without scoring', () => {
   assert.equal(text.value, '维生素D 1000IU')
   assert.equal(text.scored, null)
   const choice = result.items.find(item => item.no === 2)
-  assert.equal(choice.value, 'B')
+  assert.equal(choice.value, '2')
   assert.equal(choice.scored, null)
   assert.deepEqual(result.invalid, [])
 })
@@ -408,7 +428,7 @@ test('a choice value outside its options is flagged, not stored', () => {
 
 test('number items use their own bounds, including decimals', () => {
   const def = byId('CRT')
-  const ok = scoreAnswers(def, { 1: '0.05', 2: '5', 3: '24', 4: 'A' })
+  const ok = scoreAnswers(def, { 1: '0.05', 2: '5', 3: '24', 4: '2' })
   assert.equal(ok.answered, 4)
   assert.equal(ok.items.find(item => item.no === 1).value, 0.05)
   assert.deepEqual(ok.invalid, [])

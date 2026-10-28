@@ -30,19 +30,19 @@
       "text": "",
       "options": [
         {
-          "value": "A",
+          "value": "1",
           "label": "完全没看过"
         },
         {
-          "value": "B",
+          "value": "2",
           "label": "见过1道"
         },
         {
-          "value": "C",
+          "value": "3",
           "label": "见过2道"
         },
         {
-          "value": "D",
+          "value": "4",
           "label": "见过3道题"
         }
       ]

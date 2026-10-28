@@ -485,12 +485,19 @@ export function parseValue(def, raw, item) {
   }
   if (kind === 'choice' || kind === 'multi') {
     const options = (item && item.options) || []
-    const allowed = new Set(options.map(option => option.value))
+    // QuestionPro hands numeric choice codes back as `4.0`; compare the
+    // numeric form so `4.0` matches option `4`.
+    const simplify = value => {
+      const token = String(value).trim()
+      const numeric = /^(\d+)\.0+$/.exec(token)
+      return numeric ? numeric[1] : token
+    }
+    const allowed = new Set(options.map(option => simplify(option.value)))
     const parts = kind === 'multi'
       ? text.split(/[;,，；]/).map(part => part.trim()).filter(Boolean)
       : [text]
-    if (parts.length && parts.every(part => allowed.has(part))) {
-      return { value: kind === 'multi' ? parts.join(',') : parts[0] }
+    if (parts.length && parts.every(part => allowed.has(simplify(part)))) {
+      return { value: kind === 'multi' ? parts.map(simplify).join(',') : simplify(parts[0]) }
     }
     return { value: null, reason: 'unparsed', raw: text }
   }
@@ -788,12 +795,11 @@ export function headerCode(name) {
   return match ? match[1].trim() : text
 }
 
-function itemColumnCandidates(def, wave, header) {
+function itemColumnCandidates(def, wave, header, taken = new Set()) {
   const codes = def.codes[wave] || []
   const normalized = header.map(normalizeCode)
   const headerCodes = header.map(headerCode)
-  const normalizedCodes = headerCodes.map(normalizeCode)
-  const claimed = new Set()
+  const claimed = new Set(taken)
 
   // Group columns by their bracket code so repeated matrix codes keep order.
   const groups = new Map()
@@ -863,11 +869,15 @@ function itemColumnCandidates(def, wave, header) {
 export function mapImportColumns(def, wave, header, rows) {
   const names = (header || []).map(name => String(name ?? '').trim())
   const id = findIdColumn(names, rows)
-  const { items, claimed } = itemColumnCandidates(def, wave, names)
+  // Claim the id column first: the screening export reuses `Q4` for both the
+  // participant number and the drinking-frequency item, so item mapping must
+  // not steal the id column.
+  const taken = new Set()
   if (id.column) {
     const at = names.indexOf(id.column)
-    if (at >= 0) claimed.add(at)
+    if (at >= 0) taken.add(at)
   }
+  const { items, claimed } = itemColumnCandidates(def, wave, names, taken)
   const extras = names.filter((name, at) => !claimed.has(at))
   const unmatched = items.filter(item => !item.column).map(item => item.no)
   return {

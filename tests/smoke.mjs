@@ -197,7 +197,7 @@ const mixed = await request(handler, 'POST', 'save', {
   id: '11002',
   scale: 'BODY_STATE',
   wave: 'T0',
-  values: { 1: '3', 2: 'B', 5: '1', 6: '2', 7: '4', 8: '5', 9: 'B', 10: '维生素D 1000IU' }
+  values: { 1: '3', 2: '2', 5: '1', 6: '2', 7: '4', 8: '5', 9: '2', 10: '维生素D 1000IU' }
 })
 assert.equal(mixed.scored.answered, 8)
 assert.equal(mixed.scored.items.find(item => item.no === 10).value, '维生素D 1000IU')

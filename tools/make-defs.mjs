@@ -260,7 +260,7 @@ specs.push(
     version: '自编（实验问卷题目整理）',
     waves: ['T0', 'ts'],
     itemCount: 4,
-    response: { min: 0, max: 3, labels: FREQ_4 },
+    response: { min: 1, max: 4, labels: {} },
     notes: '过去两周：情绪低落、兴趣减退、紧张、无法停止担心。不计分。'
   }),
   unscored({
@@ -473,14 +473,14 @@ specs.push(
     response: { min: 1, max: 5, labels: {} },
     items: [
       { no: 1, kind: 'choice', text: '', options: FREQ_YEAR },
-      { no: 2, kind: 'choice', text: '', options: [{ value: 'A', label: '从未吸烟' }, { value: 'B', label: '已戒烟' }, { value: 'C', label: '正在吸烟' }] },
+      { no: 2, kind: 'choice', text: '', options: [{ value: '1', label: '从未吸烟' }, { value: '2', label: '已戒烟' }, { value: '3', label: '正在吸烟' }] },
       { no: 3, kind: 'choice', text: '', options: QUIT_DURATION },
       { no: 4, kind: 'choice', text: '', options: SMOKE_NOW },
       { no: 5, kind: 'choice', text: '', options: CAFFEINE },
       { no: 6, kind: 'choice', text: '', options: EXERCISE },
       { no: 7, kind: 'choice', text: '', options: DIET },
       { no: 8, kind: 'choice', text: '', options: SLEEP },
-      { no: 9, kind: 'choice', text: '', options: [{ value: 'A', label: '否，目前未服用任何药物或补剂' }, { value: 'B', label: '是，目前正在服用' }] },
+      { no: 9, kind: 'choice', text: '', options: [{ value: '1', label: '否，目前未服用任何药物或补剂' }, { value: '2', label: '是，目前正在服用' }] },
       { no: 10, kind: 'text', text: '', maxLength: 300 }
     ],
     notes: '第 1–4 题问过去一年，第 5–8 题问最近两周；第 3、4 题按吸烟状态二选一填写；第 10 题填药物或补剂名称。答案按选项编号或原文保存。'
@@ -498,7 +498,7 @@ specs.push(
       { no: 1, kind: 'number', text: '', min: 0, max: 10 },
       { no: 2, kind: 'number', text: '', min: 0, max: 1000 },
       { no: 3, kind: 'number', text: '', min: 0, max: 1000 },
-      { no: 4, kind: 'choice', text: '', options: [{ value: 'A', label: '完全没看过' }, { value: 'B', label: '见过1道' }, { value: 'C', label: '见过2道' }, { value: 'D', label: '见过3道题' }] }
+      { no: 4, kind: 'choice', text: '', options: [{ value: '1', label: '完全没看过' }, { value: '2', label: '见过1道' }, { value: '3', label: '见过2道' }, { value: '4', label: '见过3道题' }] }
     ],
     notes: '前三题填具体数字（允许小数，如 0.05）；第 4 题是既往接触。答案按原文保存。'
   }),
