@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 5
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "家庭经济、储蓄、时间规划、决策时的时间/金钱优先。不计分。",
+  "id": "BACKGROUND",
+  "name": "Distracting · 总体状态",
+  "short": "总体状态",
+  "version": "自编（实验问卷题目整理）",
+  "waves": [
+    "T0"
+  ],
+  "itemCount": 5,
+  "response": {
+    "min": 1,
+    "max": 5,
+    "labels": {
+      "1": "非常不认同",
+      "2": "比较不认同",
+      "3": "不确定",
+      "4": "比较认同",
+      "5": "非常认同"
+    }
+  }
+}

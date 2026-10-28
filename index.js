@@ -37,6 +37,7 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PKG_DEFS = path.join(HERE, 'defs')
+const PKG_FLOW = path.join(HERE, 'flow.json')
 const ROUTE = '/api/scale-desk'
 const HEADER = 'x-scale-desk'
 const MAX_BODY = 8 * 1024 * 1024
@@ -46,18 +47,23 @@ const DEFAULTS = {
   projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文'
 }
 
+const KIND_LABEL = { scale: '量表', task: '任务', paper: '纸质', demo: '人口学', audio: '音频', text: '书写', survey: '问卷', rest: '练习' }
+
 const LAB_README = `# _lab/scales
 
-量表定义与原始作答。派生结果不在这里：\`_lab/scores.csv\`（宽表）与
+量表定义、施测流程与原始作答。派生结果不在这里：\`_lab/scores.csv\`（宽表）与
 \`_lab/scores_detail.csv\`（每题明细）由插件重算生成，删掉可以重建。
 
-- \`defs/<量表>.json\`：题号、反向标记、计分键、缺失规则、导出码、出处与版本。
-  题目文本默认留空（不把量表题目打进代码仓库）；要填就写进 \`items[].text\`。
+- \`flow.json\`：施测流程（阶段与步骤）。量表步骤用 \`scale\` + \`wave\` 指向定义，
+  其余步骤用 \`title\` 与 \`note\` 说明任务。
+- \`defs/<量表>.json\`：题号、反向标记、计分键、缺失规则、导出码、出处、版本、
+  指导语。\`items[].text\` 与 \`instructions\` 默认留空（题目不随插件仓库分发）；
+  在面板「量表库 → 编辑题面」里填，或直接改这里。
 - \`answers/<量表>__<波次>.csv\`：原始作答，\`编号,q01,q02,...\`，空 = 缺失。
   这是原始数据，不要手工改成计算结果。
 - \`imports.json\`：每次导入/录入的时间、来源文件、当时使用的定义版本。
 
-改了定义或作答，面板点「重算」即重建 scores.csv。
+改了定义或作答，面板点「重算」即重建 scores.csv；改波次在「量表库 → 波次与导出码」。
 `
 
 class RouteError extends Error {
@@ -192,6 +198,7 @@ function resolveConfig(config = {}) {
     scoresPath: path.join(labDir, 'scores.csv').replace(/\\/g, '/'),
     detailPath: path.join(labDir, 'scores_detail.csv').replace(/\\/g, '/'),
     exportDir: path.join(labDir, 'export').replace(/\\/g, '/'),
+    flowPath: path.join(scalesDir, 'flow.json').replace(/\\/g, '/'),
     subjectsPath: String(config.subjectsPath || join('_lab', 'subjects.csv')).replace(/\\/g, '/')
   }
 }
@@ -200,20 +207,79 @@ function resolveConfig(config = {}) {
  * definitions + answers
  * ------------------------------------------------------------------ */
 
-/** First run: copy the six shipped definitions into _lab so they can be edited. */
+/** First run: copy the shipped definitions and the protocol flow into _lab. */
 async function ensureSeeded(cfg) {
   await mkdir(cfg.defsDir, { recursive: true })
   await mkdir(cfg.answersDir, { recursive: true })
   const existing = await listFiles(cfg.defsDir, '.json')
-  if (existing.length) return 0
-  const shipped = await listFiles(PKG_DEFS, '.json')
+  const shipped = existing.length ? [] : await listFiles(PKG_DEFS, '.json')
   for (const name of shipped) {
     await copyFile(path.join(PKG_DEFS, name), path.join(cfg.defsDir, name))
   }
-  const readme = path.join(cfg.scalesDir, 'README.md')
-  const hasReadme = await stat(readme).then(() => true).catch(() => false)
-  if (!hasReadme) await writeFile(readme, LAB_README, 'utf8')
+  const hasFlow = await stat(cfg.flowPath).then(() => true).catch(() => false)
+  if (!hasFlow) {
+    await copyFile(PKG_FLOW, cfg.flowPath)
+    shipped.push('flow.json')
+  }
+  if (shipped.length) {
+    const readme = path.join(cfg.scalesDir, 'README.md')
+    const hasReadme = await stat(readme).then(() => true).catch(() => false)
+    if (!hasReadme) await writeFile(readme, LAB_README, 'utf8')
+  }
   return shipped.length
+}
+
+/** The protocol: ordered stages, each with ordered steps. */
+async function loadFlow(cfg, defs) {
+  let raw
+  try {
+    raw = JSON.parse(await readFile(cfg.flowPath, 'utf8'))
+  } catch (error) {
+    return { version: '', source: '', note: '', stages: [], problems: [{ level: 'bad', text: `流程文件读不了：${error.message}` }] }
+  }
+  const problems = []
+  const stages = []
+  const seen = new Set()
+  for (const stage of Array.isArray(raw.stages) ? raw.stages : []) {
+    const id = String(stage && stage.id || '').trim()
+    if (!id) {
+      problems.push({ level: 'bad', text: '有一个阶段没有 id' })
+      continue
+    }
+    if (seen.has(id)) problems.push({ level: 'warn', text: `阶段 ${id} 重复` })
+    seen.add(id)
+    const steps = []
+    for (const step of Array.isArray(stage.steps) ? stage.steps : []) {
+      const kind = String(step && step.kind || 'task')
+      const entry = {
+        kind,
+        title: String(step && step.title || ''),
+        note: String(step && step.note || ''),
+        scale: String(step && step.scale || ''),
+        wave: String(step && step.wave || '')
+      }
+      if (kind === 'scale') {
+        const def = defs.find(item => item.id === entry.scale)
+        if (!def) {
+          problems.push({ level: 'bad', text: `${id} 引用了不存在的量表 ${entry.scale}` })
+        } else if (!def.waves.includes(entry.wave)) {
+          problems.push({ level: 'bad', text: `${id}：${def.short} 没有 ${entry.wave} 这个波次` })
+        } else {
+          entry.title = entry.title || `${def.short}（${def.name}）`
+        }
+      }
+      if (!entry.title) entry.title = entry.kind === 'scale' ? entry.scale : '（未命名步骤）'
+      steps.push(entry)
+    }
+    stages.push({ id, label: String(stage.label || id), note: String(stage.note || ''), steps })
+  }
+  return {
+    version: String(raw.version || ''),
+    source: String(raw.source || ''),
+    note: String(raw.note || ''),
+    stages,
+    problems
+  }
 }
 
 async function loadDefs(cfg) {
@@ -343,6 +409,7 @@ async function readSubjectIds(cfg) {
 async function buildModel(cfg, { seed = true } = {}) {
   const seeded = seed ? await ensureSeeded(cfg) : 0
   const { defs, problems: defProblems } = await loadDefs(cfg)
+  const flow = await loadFlow(cfg, defs)
   const { files: answerFiles, problems: answerProblems } = await loadAnswerFiles(cfg)
   const provenance = await loadProvenance(cfg)
   const answerRows = answerFiles.flatMap(file => file.rows.map(row => ({
@@ -378,6 +445,7 @@ async function buildModel(cfg, { seed = true } = {}) {
   return {
     seeded,
     defs,
+    flow,
     answerFiles,
     answerRows,
     provenance,
@@ -421,6 +489,7 @@ function instrumentPayload(model, def) {
     source: def.source,
     license: def.license,
     notes: def.notes,
+    instructions: def.instructions,
     unit: def.unit,
     file: def.file,
     columns: scoreColumns(def).filter(col => col.kind === 'score').map(col => col.key)
@@ -458,6 +527,7 @@ function statusPayload(model, cfg) {
     },
     issues: model.issues.slice(0, MAX_ISSUES),
     issueCounts: model.counts,
+    flow: model.flow,
     imports: [...model.provenance].reverse().slice(0, 30),
     totals: {
       instruments: instruments.length,
@@ -619,6 +689,7 @@ export function apply(ctx, config = {}) {
         source: def.source,
         license: def.license,
         notes: def.notes,
+        instructions: def.instructions,
         unit: def.unit,
         file: def.file,
         columns: scoreColumns(def)
@@ -1033,9 +1104,36 @@ export function apply(ctx, config = {}) {
             }).join('，')
             const range = def.scoring.subscales && Object.values(def.scoring.subscales).find(sub => sub.range)
             const subs = Object.values(def.scoring.subscales)
-            lines.push(`- ${def.short}（${def.name}）：${def.itemCount} 题，${def.scoring.type === 'mean' ? '均分' : '累加'}${subs.length > 1 ? '，' + subs.map(sub => sub.label).join('/') : ''}${range ? `，范围 ${range.range[0]}–${range.range[1]}` : ''}；反向题 ${def.items.filter(item => item.reverse).map(item => item.no).join('、') || '无'}；${recorded}；版本：${def.version}`)
+            lines.push(`- ${def.short}（${def.name}）：${def.itemCount} 题，${def.scoring.type === 'mean' ? '均分' : def.scoring.type === 'none' ? '不计分' : '累加'}${subs.length > 1 ? '，' + subs.map(sub => sub.label).join('/') : ''}${range ? `，范围 ${range.range[0]}–${range.range[1]}` : ''}；反向题 ${def.items.filter(item => item.reverse).map(item => item.no).join('、') || '无'}；${recorded}；版本：${def.version}`)
           }
           lines.push(`派生：scores.csv 列 ${current.scores.columns.length}，行 ${current.scores.rows.length}；校验高 ${current.counts.issueBad} 条、中 ${current.counts.issueWarn} 条。`)
+          return { text: lines.join('\n') }
+        }
+      })
+
+      scope.tools.register({
+        name: 'scale_flow',
+        description: '按施测顺序列出实验流程：每个阶段有哪些问卷、量表与任务，量表对应哪个波次、已录几份。数据来自 _lab/scales/flow.json。',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        output: textOutput,
+        async execute() {
+          const current = await model(false)
+          const flow = current.flow
+          const lines = [`实验流程：${flow.stages.length} 个阶段（${flow.version || '未标版本'}）。`]
+          for (const stage of flow.stages) {
+            lines.push('')
+            lines.push(`${stage.label}${stage.note ? ' — ' + stage.note : ''}`)
+            stage.steps.forEach((step, index) => {
+              if (step.kind === 'scale') {
+                const def = current.defs.find(item => item.id === step.scale)
+                const file = current.answerFiles.find(item => item.scale === step.scale && item.wave === step.wave)
+                lines.push(`  ${index + 1}. [量表] ${def ? def.short : step.scale} ${step.wave}（已录 ${file ? file.rows.length : 0} 份）`)
+              } else {
+                lines.push(`  ${index + 1}. [${KIND_LABEL[step.kind] || step.kind}] ${step.title}${step.note ? '（' + step.note + '）' : ''}`)
+              }
+            })
+          }
+          if (flow.problems.length) lines.push('', `流程问题 ${flow.problems.length} 条：` + flow.problems.map(item => item.text).join('；'))
           return { text: lines.join('\n') }
         }
       })

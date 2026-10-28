@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 6,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 7,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 8,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 9,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 10,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 11,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 12,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 13,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 14,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 15,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 16,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 17,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 18,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 18
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "原文档未给反向计分规则，故不计分；若后续要算总分，先确认反向题号。",
+  "id": "NFC",
+  "name": "认知需求量表",
+  "short": "认知需求",
+  "version": "实验问卷题目整理",
+  "waves": [
+    "post"
+  ],
+  "itemCount": 18,
+  "response": {
+    "min": 1,
+    "max": 5,
+    "labels": {
+      "1": "非常不符合",
+      "2": "比较不符合",
+      "3": "不确定",
+      "4": "比较符合",
+      "5": "非常符合"
+    }
+  }
+}

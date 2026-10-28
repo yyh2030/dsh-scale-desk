@@ -11,17 +11,20 @@
  */
 
 const DEFAULT_DECIMALS = 2
-const WAVE_ORDER = ['T0', 'T1', 'T2', 'post', 'week']
+const WAVE_ORDER = ['T0', 'T1', 'T2', 'imagery', 'meta', 'post', 'end', 'week']
 
 export const WAVE_LABEL = {
   T0: 'T0 基线',
   T1: 'T1 诱导后',
   T2: 'T2 干预后',
-  post: '决策后',
+  imagery: '想象后',
+  meta: 'AI 决策后',
+  post: '事后问卷',
+  end: '结束',
   week: '一周追踪'
 }
 
-export const WAVE_SHORT = { T0: 'T0', T1: 'T1', T2: 'T2', post: 'post', week: 'week' }
+export const WAVE_SHORT = { T0: 'T0', T1: 'T1', T2: 'T2', imagery: '想象后', meta: '决策后', post: '事后', end: '结束', week: 'week' }
 
 /* ------------------------------------------------------------------ *
  * csv
@@ -148,6 +151,7 @@ export function normalizeDef(raw, fallbackId) {
     source: String(src.source || '').trim(),
     license: String(src.license || '').trim(),
     notes: String(src.notes || '').trim(),
+    instructions: String(src.instructions || '').trim(),
     unit: String(src.unit || '分').trim(),
     decimals: Number.isInteger(src.decimals) ? src.decimals : DEFAULT_DECIMALS
   }
@@ -182,11 +186,14 @@ export function normalizeDef(raw, fallbackId) {
   }
 
   const scoring = src.scoring && typeof src.scoring === 'object' ? src.scoring : {}
-  def.scoring = { type: scoring.type === 'mean' ? 'mean' : 'sum', subscales: {} }
+  const scoringType = scoring.type === 'none' ? 'none' : scoring.type === 'mean' ? 'mean' : 'sum'
+  def.scoring = { type: scoringType, subscales: {} }
   const declaredSubs = scoring.subscales && typeof scoring.subscales === 'object' ? scoring.subscales : {}
-  const subEntries = Object.keys(declaredSubs).length
-    ? Object.entries(declaredSubs)
-    : [['total', { items: def.items.map(item => item.no) }]]
+  const subEntries = scoringType === 'none'
+    ? []
+    : Object.keys(declaredSubs).length
+      ? Object.entries(declaredSubs)
+      : [['total', { items: def.items.map(item => item.no) }]]
 
   for (const [key, rawSub] of subEntries) {
     const sub = rawSub && typeof rawSub === 'object' ? rawSub : {}
@@ -270,7 +277,7 @@ export function validateDefinition(def) {
   }
 
   const subs = Object.values(def.scoring.subscales)
-  if (!subs.length) list.push(issue('bad', 'definition', '没有任何计分键'))
+  if (!subs.length && def.scoring.type !== 'none') list.push(issue('bad', 'definition', '没有任何计分键'))
   const single = subs.length === 1
 
   for (const sub of subs) {
@@ -311,10 +318,13 @@ export function validateDefinition(def) {
     }
   }
 
+  // A questionnaire that never exports codes is fine; only an inconsistent mix
+  // (some waves coded, some not) is worth a note.
+  const codedWaves = def.waves.filter(wave => (def.codes[wave] || []).length)
   for (const wave of def.waves) {
     const codes = def.codes[wave]
     if (!codes) {
-      list.push(issue('info', 'definition', `${wave} 没有导出码，导入时只能按列名/题号匹配`, { wave }))
+      if (codedWaves.length) list.push(issue('info', 'definition', `${wave} 没有导出码，导入时只能按列名/题号匹配`, { wave }))
       continue
     }
     if (codes.length !== def.itemCount) {
@@ -342,7 +352,7 @@ export function definitionSummary(def) {
     waves: def.waves,
     response: def.response,
     scoringType: def.scoring.type,
-    scoringLabel: def.scoring.type === 'mean' ? '均分' : '累加',
+    scoringLabel: def.scoring.type === 'mean' ? '均分' : def.scoring.type === 'none' ? '不计分' : '累加',
     missing: def.missing,
     reverse: def.items.filter(item => item.reverse).map(item => item.no),
     subscales: subs.map(sub => ({
@@ -931,7 +941,7 @@ export function scoresSummaryText(defs, scores, issues = []) {
       const done = scores.rows.filter(row => row.cells[missingCol?.key]?.status && row.cells[missingCol.key].status !== 'absent').length
       return `${wave} ${done} 人`
     }).join('，')
-    lines.push(`- ${def.short}（${def.name}，${def.itemCount} 题，${def.scoring.type === 'mean' ? '均分' : '累加'}）：${perWave}；列 ${cols.map(col => col.key).join(' / ')}`)
+    lines.push(`- ${def.short}（${def.name}，${def.itemCount} 题，${def.scoring.type === 'mean' ? '均分' : def.scoring.type === 'none' ? '不计分' : '累加'}）：${perWave}；列 ${cols.map(col => col.key).join(' / ')}`)
   }
   if (issues.length) {
     const bad = issues.filter(item => item.level === 'bad').length

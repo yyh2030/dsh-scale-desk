@@ -1,0 +1,113 @@
+{
+  "version": "2026-10-28",
+  "source": "02_实验材料与问卷/实验问卷题目整理.docx",
+  "note": "施测顺序以这份文档为准。MS 写作与 EFT/ERT 音频的指导语不在插件内，按实验材料执行。",
+  "stages": [
+    {
+      "id": "T0",
+      "label": "Phase 1 · T0 基线",
+      "steps": [
+        { "kind": "paper", "title": "知情同意书（带被试编号）" },
+        { "kind": "demo", "title": "基本人口学问卷", "note": "纸质填写；用「人口学录入」面板录入" },
+        { "kind": "task", "title": "中文调整金额延迟折扣任务（DDT）", "note": "PsychoPy，T0" },
+        { "kind": "scale", "scale": "FTPS", "wave": "T0" },
+        { "kind": "scale", "scale": "PANAS_NA_NOW", "wave": "T0" },
+        { "kind": "scale", "scale": "STAI_S", "wave": "T0" },
+        { "kind": "scale", "scale": "CT_DAS", "wave": "T0" }
+      ]
+    },
+    {
+      "id": "writing",
+      "label": "Phase 2 · 死亡突显性／牙痛写作（按分组，纸质）",
+      "note": "两组二选一，每题至少 150 字；MS 指导语按纸质材料执行，插件不存。",
+      "steps": [
+        { "kind": "text", "title": "实验组：（1）想到自己死亡时的想法与感受" },
+        { "kind": "text", "title": "实验组：（2）想象死亡那一刻及之后身体发生的变化" },
+        { "kind": "text", "title": "控制组：（1）想象牙痛时的想法与感受" },
+        { "kind": "text", "title": "控制组：（2）想象牙痛时的身体感受与变化" }
+      ]
+    },
+    {
+      "id": "distract",
+      "label": "Phase 2 · Distracting 问卷",
+      "steps": [
+        { "kind": "scale", "scale": "BACKGROUND", "wave": "T0" },
+        { "kind": "scale", "scale": "TIME_PERCEPTION", "wave": "T0" },
+        { "kind": "survey", "title": "身体状态：饮酒、吸烟、戒烟时长、当前吸烟频率、咖啡因、运动、饮食、睡眠、药物", "note": "选择式与填空，非量表；药物名称需文字填写" },
+        { "kind": "scale", "scale": "MOOD_CHECK", "wave": "T0" }
+      ]
+    },
+    {
+      "id": "T1",
+      "label": "Phase 3 · T1（写作后）",
+      "steps": [
+        { "kind": "scale", "scale": "CT_DAS", "wave": "T1" },
+        { "kind": "task", "title": "中文调整金额延迟折扣任务（DDT）", "note": "PsychoPy，T1" },
+        { "kind": "scale", "scale": "FTPS", "wave": "T1" }
+      ]
+    },
+    {
+      "id": "imagery",
+      "label": "Phase 4 · 想象／回忆程序（按分组，音频引导）",
+      "note": "EFT 与 ERT 的指导语按音频执行，插件不存。",
+      "steps": [
+        { "kind": "audio", "title": "积极未来想象（EFT，4 个未来事件）" },
+        { "kind": "audio", "title": "近期事件回忆（ERT，过去 7 天 4 个事件）" },
+        { "kind": "scale", "scale": "IMAGERY_APPRAISAL", "wave": "imagery" }
+      ]
+    },
+    {
+      "id": "T2",
+      "label": "Phase 5 · T2（干预后）",
+      "steps": [
+        { "kind": "task", "title": "中文调整金额延迟折扣任务（DDT）", "note": "PsychoPy，T2" },
+        { "kind": "scale", "scale": "FTPS", "wave": "T2" },
+        { "kind": "scale", "scale": "PANAS_NA_NOW", "wave": "T2" },
+        { "kind": "scale", "scale": "STAI_S", "wave": "T2" }
+      ]
+    },
+    {
+      "id": "ai",
+      "label": "Phase 6 · AI-IDM",
+      "note": "Survey_meta 必须紧跟 IDM2；AI 态度问卷必须放在决策任务之后。",
+      "steps": [
+        { "kind": "task", "title": "IDM1_baseline 基线跨期决策", "note": "PsychoPy" },
+        { "kind": "task", "title": "IDM2_meta 实验操纵", "note": "PsychoPy + Survey" },
+        { "kind": "scale", "scale": "AI_META_RATE", "wave": "meta" },
+        { "kind": "scale", "scale": "AI_META_INFLUENCE", "wave": "meta" },
+        { "kind": "scale", "scale": "AI_META_EVALUATION", "wave": "meta" },
+        { "kind": "scale", "scale": "AI_META_RESISTANCE", "wave": "meta" },
+        { "kind": "scale", "scale": "AI_META_AFFECT", "wave": "meta" },
+        { "kind": "task", "title": "IDM3_post 检验操纵对决策的影响", "note": "PsychoPy" },
+        { "kind": "scale", "scale": "AI_USE_MONEY", "wave": "post" },
+        { "kind": "scale", "scale": "AI_USE_HABIT", "wave": "post" },
+        { "kind": "scale", "scale": "AI_USE_HELP", "wave": "post" },
+        { "kind": "survey", "title": "三道数学题（球拍与球、机器与零件、睡莲）与既往接触", "note": "数值填写 + 单选，非量表" },
+        { "kind": "scale", "scale": "IMPULSIVITY", "wave": "post" },
+        { "kind": "scale", "scale": "NFC", "wave": "post" }
+      ]
+    },
+    {
+      "id": "end",
+      "label": "Phase 7 · 结束",
+      "steps": [
+        { "kind": "rest", "title": "4-7-8 呼吸与当下感官定向（着陆）练习" },
+        { "kind": "scale", "scale": "DISCOMFORT", "wave": "end" },
+        { "kind": "survey", "title": "支持需求选择", "note": "私下交谈 / 休息更久 / 获取校内心理支持信息" },
+        { "kind": "paper", "title": "研究结束说明、心理支持卡、debriefing" },
+        { "kind": "paper", "title": "补偿发放" },
+        { "kind": "paper", "title": "随访单独同意与联系方式登记" }
+      ]
+    },
+    {
+      "id": "week",
+      "label": "Phase 8 · 一周后随访",
+      "steps": [
+        { "kind": "scale", "scale": "PANAS_NA_WEEK", "wave": "week" },
+        { "kind": "scale", "scale": "DASS_21", "wave": "week" },
+        { "kind": "scale", "scale": "DISCOMFORT", "wave": "week" },
+        { "kind": "survey", "title": "不良体验与支持需求", "note": "单选与文字说明，非量表" }
+      ]
+    }
+  ]
+}

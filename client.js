@@ -175,7 +175,8 @@ window.__ModuleLoader__.load({
      * small pieces
      * ================================================================ */
 
-    const WAVE_LABEL = { T0: 'T0 基线', T1: 'T1 诱导后', T2: 'T2 干预后', post: '决策后', week: '一周追踪' }
+    const WAVE_LABEL = { T0: 'T0 基线', T1: 'T1 诱导后', T2: 'T2 干预后', imagery: '想象后', meta: 'AI 决策后', post: '事后问卷', end: '结束', week: '一周追踪' }
+    const FLOW_KIND = { scale: '量表', task: '任务', paper: '纸质', demo: '人口学', audio: '音频', text: '书写', survey: '问卷', rest: '练习' }
     const LEVEL_TEXT = { bad: '高', warn: '中', info: '提示' }
     const STATUS_TEXT = { ok: '完成', prorated: '折算', incomplete: '未计分', absent: '未录', empty: '未录', partial: '部分' }
     const STATUS_CLASS = { ok: 'ok', prorated: 'warn', incomplete: 'bad', absent: 'info', empty: 'info', partial: 'warn' }
@@ -397,7 +398,13 @@ window.__ModuleLoader__.load({
                     Object.entries(detail.response.labels).map(([value, text]) =>
                       h('span', { key: value }, value + ' = ' + text)
                     )
-                  )
+                  ),
+                  detail.instructions
+                    ? h('details', { className: 'sd-details' },
+                        h('summary', null, '指导语'),
+                        h('div', { className: 'sd-note', style: { marginTop: 6, whiteSpace: 'pre-wrap' } }, detail.instructions)
+                      )
+                    : null
                 ),
                 h('div', { className: 'sd-card' },
                   h('div', { className: 'sd-card-head' },
@@ -473,6 +480,12 @@ window.__ModuleLoader__.load({
                       )
                     : null,
                   saveError ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, saveError) : null,
+                  detail.instructions
+                    ? h('details', { className: 'sd-details' },
+                        h('summary', null, '指导语'),
+                        h('div', { className: 'sd-note', style: { marginTop: 6, whiteSpace: 'pre-wrap' } }, detail.instructions)
+                      )
+                    : null,
                   h('div', { className: 'sd-matrix' },
                     detail.items.map(item => {
                       const current = editing
@@ -613,11 +626,18 @@ window.__ModuleLoader__.load({
         }))
     }
 
-    function SheetEntry({ data, busy, onSave, onClear, toast }) {
-      const [scaleId, setScaleId] = useState(data.instruments[0] ? data.instruments[0].id : '')
+    function SheetEntry({ data, busy, onSave, onClear, toast, initial }) {
+      const firstScale = initial && initial.scale && data.instruments.some(item => item.id === initial.scale)
+        ? initial.scale
+        : (data.instruments[0] ? data.instruments[0].id : '')
+      const firstInstrument = data.instruments.find(item => item.id === firstScale) || data.instruments[0]
+      const firstWave = initial && initial.wave && firstInstrument && firstInstrument.waves.includes(initial.wave)
+        ? initial.wave
+        : (firstInstrument ? firstInstrument.waves[0] : 'T0')
+      const [scaleId, setScaleId] = useState(firstScale)
       const instrument = data.instruments.find(item => item.id === scaleId) || data.instruments[0]
-      const [wave, setWave] = useState(instrument ? instrument.waves[0] : 'T0')
-      const [id, setId] = useState('')
+      const [wave, setWave] = useState(firstWave)
+      const [id, setId] = useState(initial && initial.id ? initial.id : '')
       const [values, setValues] = useState({})
       const [loaded, setLoaded] = useState(null)
       const [result, setResult] = useState(null)
@@ -736,6 +756,12 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'sd-note' }, '点数字作答，再点一次取消')
                 )
               ),
+              def.instructions
+                ? h('details', { className: 'sd-details' },
+                    h('summary', null, '指导语'),
+                    h('div', { className: 'sd-note', style: { marginTop: 6, whiteSpace: 'pre-wrap' } }, def.instructions)
+                  )
+                : null,
               h('div', { className: 'sd-matrix' },
                 Array.from({ length: def.itemCount }, (_, index) => {
                   const no = index + 1
@@ -748,24 +774,43 @@ window.__ModuleLoader__.load({
                       title: text || '第 ' + no + ' 题（文本未录入）'
                     }, text || '第 ' + no + ' 题'),
                     h('div', { className: 'sd-opts' },
-                      Array.from({ length: Math.round(def.response.max - def.response.min + 1) }, (_, offset) => {
-                        const value = def.response.min + offset
-                        const on = String(values[no]) === String(value)
-                        return h('button', {
-                          key: value,
-                          type: 'button',
-                          className: 'sd-opt' + (on ? ' is-on' : ''),
-                          title: def.response.labels[value] || '',
-                          onClick: () => {
-                            setValues(prev => {
-                              const next = { ...prev }
-                              if (on) delete next[no]
-                              else next[no] = String(value)
-                              return next
-                            })
-                          }
-                        }, String(value))
-                      })
+                      Math.round(def.response.max - def.response.min + 1) > 12
+                        ? h('input', {
+                            className: 'sd-input',
+                            type: 'number',
+                            min: def.response.min,
+                            max: def.response.max,
+                            style: { width: 96, height: 26, fontSize: 11.5, textAlign: 'right' },
+                            value: values[no] === undefined ? '' : String(values[no]),
+                            placeholder: def.response.min + '–' + def.response.max,
+                            onChange: event => {
+                              const raw = event.target.value
+                              setValues(prev => {
+                                const next = { ...prev }
+                                if (raw === '') delete next[no]
+                                else next[no] = raw
+                                return next
+                              })
+                            }
+                          })
+                        : Array.from({ length: Math.round(def.response.max - def.response.min + 1) }, (_, offset) => {
+                            const value = def.response.min + offset
+                            const on = String(values[no]) === String(value)
+                            return h('button', {
+                              key: value,
+                              type: 'button',
+                              className: 'sd-opt' + (on ? ' is-on' : ''),
+                              title: def.response.labels[value] || '',
+                              onClick: () => {
+                                setValues(prev => {
+                                  const next = { ...prev }
+                                  if (on) delete next[no]
+                                  else next[no] = String(value)
+                                  return next
+                                })
+                              }
+                            }, String(value))
+                          })
                     )
                   )
                 })
@@ -1059,7 +1104,91 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function EntryTab({ data, toast, refresh }) {
+    /* ================================================================ *
+     * 流程
+     * ================================================================ */
+
+    function FlowTab({ data, onOpenScale }) {
+      const flow = data.flow || { stages: [], problems: [] }
+      const recorded = (scale, wave) => {
+        const instrument = data.instruments.find(item => item.id === scale)
+        return instrument && instrument.data && instrument.data[wave] ? instrument.data[wave].rows : 0
+      }
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+        h('div', { className: 'sd-card' },
+          h('div', { className: 'sd-card-head' },
+            h('h3', null, '施测流程'),
+            h('span', { className: 'sd-note' }, [flow.source, flow.version].filter(Boolean).join(' · ')),
+            h('span', { className: 'sd-chip', style: { marginLeft: 'auto' } }, flow.stages.length + ' 个阶段')
+          ),
+          flow.note ? h('div', { className: 'sd-note' }, flow.note) : null,
+          flow.problems && flow.problems.length
+            ? h('div', { className: 'sd-issues' },
+                flow.problems.map((item, index) => h('div', { className: 'sd-issue', key: index },
+                  h('span', { className: 'sd-badge sd-badge-' + (item.level === 'bad' ? 'bad' : 'warn') }, item.level === 'bad' ? '高' : '中'),
+                  h('span', { className: 'sd-issue-body' }, item.text)
+                ))
+              )
+            : null
+        ),
+        flow.stages.map(stage => h('div', { className: 'sd-card', key: stage.id },
+          h('div', { className: 'sd-card-head' },
+            h('h3', null, stage.label),
+            h('span', { className: 'sd-note' }, stage.steps.length + ' 步')
+          ),
+          stage.note ? h('div', { className: 'sd-note' }, stage.note) : null,
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            stage.steps.map((step, index) => {
+              const isScale = step.kind === 'scale'
+              const instrument = isScale ? data.instruments.find(item => item.id === step.scale) : null
+              return h('div', {
+                key: index,
+                style: {
+                  display: 'grid',
+                  gridTemplateColumns: '22px 56px minmax(0,1fr) auto',
+                  gap: 10,
+                  alignItems: 'center',
+                  padding: '5px 8px',
+                  border: '1px solid var(--sd-line)',
+                  borderRadius: 8,
+                  background: 'var(--sd-bg)'
+                }
+              },
+                h('span', { className: 'sd-note', style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, String(index + 1)),
+                h('span', { className: 'sd-chip', style: { justifyContent: 'center' } }, FLOW_KIND[step.kind] || step.kind),
+                h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 } },
+                  h('span', {
+                    style: {
+                      fontSize: 12,
+                      fontWeight: isScale ? 600 : 400,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }
+                  }, isScale && instrument ? instrument.short + ' · ' + instrument.name : step.title),
+                  step.note ? h('span', { className: 'sd-note', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, step.note) : null
+                ),
+                isScale
+                  ? h('span', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                      h('span', { className: 'sd-chip' }, waveName(step.wave)),
+                      h('span', { className: 'sd-chip' }, recorded(step.scale, step.wave) + ' 份'),
+                      h('button', {
+                        type: 'button',
+                        className: 'sd-chip is-brand',
+                        style: { cursor: 'pointer', height: 24 },
+                        onClick: () => onOpenScale(step.scale, step.wave)
+                      }, '录入')
+                    )
+                  : h('span', { className: 'sd-note' }, '')
+              )
+            })
+          )
+        ))
+      )
+    }
+
+    function EntryTab({ data, toast, refresh, initial }) {
       const [mode, setMode] = useState('sheet')
       const [busy, setBusy] = useState('')
       const save = useCallback(async payload => {
@@ -1089,7 +1218,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'sd-tab' + (mode === 'import' ? ' is-active' : ''), onClick: () => setMode('import') }, '导入导出文件')
         ),
         mode === 'sheet'
-          ? h(SheetEntry, { data, busy: Boolean(busy), onSave: save, onClear: clear, toast })
+          ? h(SheetEntry, { data, busy: Boolean(busy), onSave: save, onClear: clear, toast, initial })
           : h(ImportPanel, { data, toast, onImported: refresh })
       )
     }
@@ -1339,8 +1468,14 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [busy, setBusy] = useState('')
       const [tab, setTab] = useState('library')
+      const [entryTarget, setEntryTarget] = useState(null)
       const [toastState, setToastState] = useState(null)
       const timer = useRef(null)
+
+      const openScale = useCallback((scale, wave) => {
+        setEntryTarget({ scale, wave, n: Date.now() })
+        setTab('entry')
+      }, [])
 
       const toast = useCallback((message, tone) => {
         setToastState({ message, tone: tone || 'ok' })
@@ -1439,7 +1574,7 @@ window.__ModuleLoader__.load({
         ),
         data
           ? h('div', { className: 'sd-tabs' },
-              [['library', '量表库'], ['entry', '录入'], ['scores', '计分'], ['validate', '校验']].map(([value, label]) =>
+              [['library', '量表库'], ['flow', '流程'], ['entry', '录入'], ['scores', '计分'], ['validate', '校验']].map(([value, label]) =>
                 h('button', {
                   type: 'button',
                   key: value,
@@ -1457,14 +1592,16 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'sd-alert sd-alert-bad' }, '面板加载失败：' + error + '（检查插件是否启用，或点「刷新」）')
             : null,
           !data
-            ? h(Empty, { title: '正在读 _lab…' }, '第一次打开会把 6 个量表定义播种到 _lab/scales/defs。')
+            ? h(Empty, { title: '正在读 _lab…' }, '第一次打开会把量表定义与施测流程播种到 _lab/scales。')
             : tab === 'library'
               ? h(LibraryTab, { data, toast, refresh, onOpenFolder: openFolder })
-              : tab === 'entry'
-                ? h(EntryTab, { data, toast, refresh })
-                : tab === 'scores'
-                  ? h(ScoreTab, { data, busy, onScore: runScore, onExport: runExport, onOpenFolder: openFolder })
-                  : h(ValidateTab, { data, busy, onValidate: runValidate })
+              : tab === 'flow'
+                ? h(FlowTab, { data, onOpenScale: openScale })
+                : tab === 'entry'
+                  ? h(EntryTab, { data, toast, refresh, initial: entryTarget })
+                  : tab === 'scores'
+                    ? h(ScoreTab, { data, busy, onScore: runScore, onExport: runExport, onOpenFolder: openFolder })
+                    : h(ValidateTab, { data, busy, onValidate: runValidate })
         ),
         toastState
           ? h('div', { className: 'sd-toast' + (toastState.tone === 'bad' ? ' is-bad' : '') }, toastState.message)

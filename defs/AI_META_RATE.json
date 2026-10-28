@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 2
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "两题滑动框 0–100%：估计询问 AI 的比例、采纳的比例。不计分。",
+  "id": "AI_META_RATE",
+  "name": "AI 建议使用与采纳比例",
+  "short": "AI·比例",
+  "version": "自编（实验问卷题目整理）",
+  "waves": [
+    "meta"
+  ],
+  "itemCount": 2,
+  "response": {
+    "min": 0,
+    "max": 100,
+    "labels": {}
+  }
+}

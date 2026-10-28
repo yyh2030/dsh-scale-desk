@@ -5,7 +5,8 @@
   "short": "CT-DAS",
   "version": "Templer（1970）；Yang et al.（2012）中文版，15 题",
   "waves": [
-    "T0"
+    "T0",
+    "T1"
   ],
   "itemCount": 15,
   "response": {

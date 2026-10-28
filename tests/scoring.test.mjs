@@ -54,14 +54,34 @@ function answers(count, value) {
 }
 
 test('every shipped definition is internally consistent', () => {
-  assert.equal(defs.length, 6)
+  assert.equal(defs.length, 21)
+  const scored = defs.filter(def => def.scoring.type !== 'none')
+  assert.equal(scored.length, 6, '六个计分量表')
+  assert.equal(defs.filter(def => def.scoring.type === 'none').length, 15, '十五个只收集不计分的问卷')
   for (const def of defs) {
     const issues = validateDefinition(def).filter(item => item.level === 'bad')
     assert.deepEqual(issues, [], `${def.id} 定义有问题：${issues.map(item => item.text).join('；')}`)
     assert.ok(def.version.length > 0, `${def.id} 必须写版本`)
+    assert.ok(Array.isArray(def.waves) && def.waves.length > 0, `${def.id} 要有波次`)
+    if (def.scoring.type === 'none') {
+      assert.deepEqual(Object.keys(def.scoring.subscales), [], `${def.id} 不计分，不该有计分键`)
+      continue
+    }
     assert.ok(Object.keys(def.codes).length > 0, `${def.id} 要有导出码`)
-    for (const wave of def.waves) assert.equal(def.codes[wave].length, def.itemCount, `${def.id} ${wave} 导出码数量`)
+    for (const wave of def.waves) {
+      if (def.codes[wave]) assert.equal(def.codes[wave].length, def.itemCount, `${def.id} ${wave} 导出码数量`)
+    }
   }
+})
+
+test('an unscored questionnaire records answers but produces no score column', () => {
+  const def = byId('BACKGROUND')
+  assert.equal(def.scoring.type, 'none')
+  assert.deepEqual(scoreColumns(def).map(col => col.key), ['BACKGROUND_T0_缺失'])
+  const result = scoreAnswers(def, answers(5, 4))
+  assert.equal(result.answered, 5)
+  assert.deepEqual(result.subs, {})
+  assert.equal(result.status, 'ok')
 })
 
 test('declared ranges agree with the item count, including mean scales', () => {

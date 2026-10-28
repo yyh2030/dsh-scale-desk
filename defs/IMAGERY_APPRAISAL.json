@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 4,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 5,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 6,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 7,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 8,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 9,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 10,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 10
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "完成想象/回忆后立刻评定，7 点（1–7）；各题锚点不同，题面里自带。不计分。",
+  "id": "IMAGERY_APPRAISAL",
+  "name": "想象／回忆过程评价表",
+  "short": "想象评价",
+  "version": "自编（实验问卷题目整理）",
+  "waves": [
+    "imagery"
+  ],
+  "itemCount": 10,
+  "response": {
+    "min": 1,
+    "max": 7,
+    "labels": {}
+  }
+}

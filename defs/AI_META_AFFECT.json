@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 2,
+      "text": "",
+      "reverse": false
+    },
+    {
+      "no": 3,
+      "text": "",
+      "reverse": false
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 3
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "效价、唤醒、疲惫各一道，锚点不同（见题面），不能相加。不计分。",
+  "id": "AI_META_AFFECT",
+  "name": "决策后即时情绪",
+  "short": "AI·情绪",
+  "version": "自编（实验问卷题目整理）",
+  "waves": [
+    "meta"
+  ],
+  "itemCount": 3,
+  "response": {
+    "min": 1,
+    "max": 5,
+    "labels": {}
+  }
+}

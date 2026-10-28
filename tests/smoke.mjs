@@ -70,13 +70,15 @@ apply(ctx, { projectRoot: root, labDir })
 
 const handler = routes.get('/api/scale-desk')
 assert.ok(handler, 'HTTP route registered')
-assert.deepEqual([...tools.keys()].sort(), ['scale_list', 'scale_score', 'scale_validate'])
+assert.deepEqual([...tools.keys()].sort(), ['scale_flow', 'scale_list', 'scale_score', 'scale_validate'])
 assert.equal(name, 'scale-desk')
 
-/* 1. first run seeds six definitions into _lab/scales ---------------------- */
+/* 1. first run seeds every definition plus the protocol into _lab/scales ---- */
 let status = await request(handler, 'GET', 'status')
-assert.equal(status.instruments.length, 6)
-assert.equal(status.seeded, 6)
+assert.equal(status.instruments.length, 21)
+assert.ok(status.seeded >= 21)
+assert.ok(status.flow && status.flow.stages.length >= 8, '流程已播种')
+assert.deepEqual(status.flow.problems, [], '流程引用都能对上定义')
 assert.equal(status.scores.counts.subjects, 0)
 assert.ok(await stat(path.join(labDir, 'scales', 'defs', 'STAI_S.json')), 'definitions seeded')
 assert.equal(status.scores.stale, false, 'first run writes a header-only scores.csv')

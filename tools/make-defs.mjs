@@ -154,7 +154,7 @@ const specs = [
     name: '中文版 Templer 死亡焦虑量表',
     short: 'CT-DAS',
     version: 'Templer（1970）；Yang et al.（2012）中文版，15 题',
-    waves: ['T0'],
+    waves: ['T0', 'T1'],
     itemCount: 15,
     response: { min: 1, max: 5, labels: LIKERT_5_DAS },
     items: items(15, [2, 3, 5, 6, 7, 15]),
@@ -200,6 +200,187 @@ const specs = [
     notes: '压力/焦虑/抑郁各 7 项原始和（0–21）×2，得 0–42 分；总分是 21 项原始和（0–63），只作描述性指标，重点报告三个分量表。'
   }
 ]
+
+/* ------------------------------------------------------------------ *
+ * 其余问卷：只收集作答，不计分（scoring.type = none）
+ * ------------------------------------------------------------------ */
+
+const UNSCORED_NOTE = '自编/修订问卷，按文档原题录入；本插件只存作答，不计算分数。'
+const AGREE = { 1: '完全不同意', 2: '比较不同意', 3: '不确定', 4: '比较同意', 5: '完全同意' }
+const AGREE_STRONG = { 1: '非常不认同', 2: '比较不认同', 3: '不确定', 4: '比较认同', 5: '非常认同' }
+const LIKE_ME = { 1: '一点也不像我', 2: '比较不像我', 3: '不确定', 4: '比较像我', 5: '非常像我' }
+const FREQ_4 = { 0: '完全没有', 1: '偶尔/几天', 2: '超过一半时间', 3: '经常/几乎每天' }
+const RARELY = { 1: '从不', 2: '偶尔', 3: '有时', 4: '总是' }
+const FIT = { 1: '非常不符合', 2: '比较不符合', 3: '不确定', 4: '比较符合', 5: '非常符合' }
+
+function unscored(spec) {
+  return {
+    schema: 1,
+    unit: '分',
+    decimals: 2,
+    items: items(spec.itemCount),
+    scoring: { type: 'none' },
+    missing: { rule: 'prorate', minAnswered: spec.itemCount },
+    codes: {},
+    source: '实验问卷题目整理.docx',
+    license: NO_TEXT_NOTE,
+    notes: UNSCORED_NOTE,
+    ...spec
+  }
+}
+
+specs.push(
+  unscored({
+    id: 'BACKGROUND',
+    name: 'Distracting · 总体状态',
+    short: '总体状态',
+    version: '自编（实验问卷题目整理）',
+    waves: ['T0'],
+    itemCount: 5,
+    response: { min: 1, max: 5, labels: AGREE_STRONG },
+    notes: '家庭经济、储蓄、时间规划、决策时的时间/金钱优先。不计分。'
+  }),
+  unscored({
+    id: 'TIME_PERCEPTION',
+    name: 'Distracting · 时间感受',
+    short: '时间感受',
+    version: '自编（实验问卷题目整理）',
+    waves: ['T0'],
+    itemCount: 6,
+    response: { min: 1, max: 5, labels: LIKE_ME },
+    notes: '时间紧张与碎片化的主观感受。不计分。'
+  }),
+  unscored({
+    id: 'MOOD_CHECK',
+    name: 'Distracting · 情绪状态补充',
+    short: '情绪补充',
+    version: '自编（实验问卷题目整理）',
+    waves: ['T0'],
+    itemCount: 4,
+    response: { min: 0, max: 3, labels: FREQ_4 },
+    notes: '过去两周：情绪低落、兴趣减退、紧张、无法停止担心。不计分。'
+  }),
+  unscored({
+    id: 'IMAGERY_APPRAISAL',
+    name: '想象／回忆过程评价表',
+    short: '想象评价',
+    version: '自编（实验问卷题目整理）',
+    waves: ['imagery'],
+    itemCount: 10,
+    response: { min: 1, max: 7, labels: {} },
+    notes: '完成想象/回忆后立刻评定，7 点（1–7）；各题锚点不同，题面里自带。不计分。'
+  }),
+  unscored({
+    id: 'AI_META_RATE',
+    name: 'AI 建议使用与采纳比例',
+    short: 'AI·比例',
+    version: '自编（实验问卷题目整理）',
+    waves: ['meta'],
+    itemCount: 2,
+    response: { min: 0, max: 100, labels: {} },
+    notes: '两题滑动框 0–100%：估计询问 AI 的比例、采纳的比例。不计分。'
+  }),
+  unscored({
+    id: 'AI_META_INFLUENCE',
+    name: 'AI 建议的影响',
+    short: 'AI·影响',
+    version: '自编（实验问卷题目整理）',
+    waves: ['meta'],
+    itemCount: 4,
+    response: { min: 1, max: 5, labels: AGREE },
+    notes: 'AI 建议对选择的影响、偏好表达与主导感。不计分。'
+  }),
+  unscored({
+    id: 'AI_META_EVALUATION',
+    name: 'AI 建议评价',
+    short: 'AI·评价',
+    version: '自编（实验问卷题目整理）',
+    waves: ['meta'],
+    itemCount: 7,
+    response: { min: 1, max: 5, labels: AGREE },
+    notes: '第 6、7 题是方向性锚点（1 = 明显偏向今天，5 = 明显偏向未来），题面里注明；前 5 题与后 2 题不要直接相加。不计分。'
+  }),
+  unscored({
+    id: 'AI_META_RESISTANCE',
+    name: 'AI 建议的回避与反抗',
+    short: 'AI·反抗',
+    version: '自编（实验问卷题目整理）',
+    waves: ['meta'],
+    itemCount: 3,
+    response: { min: 1, max: 5, labels: AGREE },
+    notes: '故意不看、有意不采纳、认为没必要。不计分。'
+  }),
+  unscored({
+    id: 'AI_META_AFFECT',
+    name: '决策后即时情绪',
+    short: 'AI·情绪',
+    version: '自编（实验问卷题目整理）',
+    waves: ['meta'],
+    itemCount: 3,
+    response: { min: 1, max: 5, labels: {} },
+    notes: '效价、唤醒、疲惫各一道，锚点不同（见题面），不能相加。不计分。'
+  }),
+  unscored({
+    id: 'AI_USE_MONEY',
+    name: '金钱选择中的 AI 态度',
+    short: 'AI·金钱',
+    version: '自编（实验问卷题目整理）',
+    waves: ['post'],
+    itemCount: 4,
+    response: { min: 1, max: 5, labels: AGREE },
+    notes: '必须放在决策任务之后。不计分。'
+  }),
+  unscored({
+    id: 'AI_USE_HABIT',
+    name: 'AI 工具使用习惯与看法',
+    short: 'AI·习惯',
+    version: '自编（实验问卷题目整理）',
+    waves: ['post'],
+    itemCount: 11,
+    response: { min: 1, max: 5, labels: AGREE },
+    notes: '日常使用习惯与总体评价。不计分。'
+  }),
+  unscored({
+    id: 'AI_USE_HELP',
+    name: '遇事询问 AI 的习惯',
+    short: 'AI·求助',
+    version: '自编（实验问卷题目整理）',
+    waves: ['post'],
+    itemCount: 4,
+    response: { min: 1, max: 5, labels: AGREE },
+    notes: '面对困难/选择时的求助倾向。不计分。'
+  }),
+  unscored({
+    id: 'IMPULSIVITY',
+    name: '冲动性量表（极简）',
+    short: '冲动性',
+    version: '极简版（实验问卷题目整理）',
+    waves: ['post'],
+    itemCount: 8,
+    response: { min: 1, max: 4, labels: RARELY },
+    notes: '第 1、4、5、6 题为正性表述，2、3、7、8 为冲动性表述；原文档未给反向计分规则，故不计分。'
+  }),
+  unscored({
+    id: 'NFC',
+    name: '认知需求量表',
+    short: '认知需求',
+    version: '实验问卷题目整理',
+    waves: ['post'],
+    itemCount: 18,
+    response: { min: 1, max: 5, labels: FIT },
+    notes: '原文档未给反向计分规则，故不计分；若后续要算总分，先确认反向题号。'
+  }),
+  unscored({
+    id: 'DISCOMFORT',
+    name: '当前不适评分',
+    short: '不适评分',
+    version: '自编（实验问卷题目整理）',
+    waves: ['end', 'week'],
+    itemCount: 1,
+    response: { min: 0, max: 100, labels: {} },
+    notes: '0–100 单题，结束与一周随访各一次。不计分。'
+  })
+)
 
 await mkdir(OUT, { recursive: true })
 for (const spec of specs) {
