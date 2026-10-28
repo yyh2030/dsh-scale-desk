@@ -1272,7 +1272,7 @@ window.__ModuleLoader__.load({
             onClick: () => fileRef.current && fileRef.current.click()
           },
             h('strong', null, '把导出文件拖到这里，或点一下选文件（可多选）'),
-            h('span', null, 'QuestionPro 选「Data Export / Raw Data」那一份；一份文件里常有多组量表，会按题码自动全部导入')
+            h('span', null, '一份文件里常有多组量表：先按题码认，认不出再按题目文字或顺序认；认过一次就把题码记进定义')
           ),
           h('input', {
             ref: fileRef,

@@ -30,6 +30,7 @@ import {
   scoresCsv,
   toCsv,
   parseCsv,
+  textSimilarity,
   validateData,
   validateDefinition
 } from '../scoring.js'
@@ -392,6 +393,40 @@ test('numeric ids coming out of Excel lose the .0 suffix', () => {
   assert.equal(normalizeId('11002.0'), '11002')
   assert.equal(normalizeId(11002), '11002')
   assert.equal(normalizeId('21001'), '21001')
+})
+
+test('different codes still map when the item texts match', () => {
+  const base = byId('FTPS')
+  const texts = [
+    '我对未来充满希望', '我计划做很多事', '未来对我来说有很多可能',
+    '我觉得人生还很长', '我感到人生没有尽头', '我觉得任何事我都能做',
+    '我还有很多时间规划人生', '我感到人生短暂',
+    '我觉得未来已经定下来', '我感到时间越来越少'
+  ]
+  const def = { ...base, items: base.items.map((item, index) => ({ ...item, text: texts[index] })) }
+  const header = ['[ANY_ID] 您的编号：', ...texts.map((text, index) => `[NEW_CODE] ${index + 1}. ${text}`)]
+  const labels = ['', ...texts.map((text, index) => `${index + 1}. ${text}`)]
+  const mapping = mapImportColumns(def, 'T1', header, [], labels)
+  assert.equal(mapping.idColumn, header[0])
+  assert.equal(mapping.matched, 10)
+  assert.deepEqual(mapping.unmatched, [])
+  assert.equal(mapping.items[3].column, header[4])
+  assert.equal(mapping.items[3].how, 'text')
+})
+
+test('a single block with no codes falls back to column order', () => {
+  const base = byId('FTPS')
+  const def = { ...base, codes: {} }
+  const header = ['[QID] 编号', ...Array.from({ length: 10 }, (_, index) => `[BLOCK] 第${index + 1}项`)]
+  const mapping = mapImportColumns(def, 'T1', header, [])
+  assert.equal(mapping.matched, 10)
+  assert.equal(mapping.items[0].how, 'order')
+})
+
+test('similarity prefers identical wording over unrelated text', () => {
+  assert.equal(textSimilarity('我对未来充满希望', '我对未来充满希望'), 1)
+  assert.ok(textSimilarity('我对未来充满希望', '未来充满希望') > 0.6)
+  assert.ok(textSimilarity('我对未来充满希望', '我喜欢喝咖啡') < 0.2)
 })
 
 test('choice and text items keep raw answers without scoring', () => {

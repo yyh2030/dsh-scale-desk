@@ -22,6 +22,7 @@ import {
   buildScores,
   detailCsv,
   guessTarget,
+  headerCode,
   isValidId,
   mapImportColumns,
   normalizeDef,
@@ -261,6 +262,52 @@ async function tableFromPayload(payload, cfg) {
   }
   if (payload && typeof payload.text === 'string') return { text: payload.text, sheet: '' }
   throw new RouteError('invalid', '没有收到文件内容')
+}
+
+/**
+ * QuestionPro puts matrix row labels in the second row (first cell empty).
+ * Returning them lets the mapper match columns by item text when codes differ.
+ */
+function detectLabelRow(table) {
+  if (!Array.isArray(table) || table.length < 2) return []
+  const row = table[1].map(value => String(value === null || value === undefined ? '' : value).trim())
+  if (row.length < 3 || row[0]) return []
+  const filled = row.filter(Boolean)
+  if (filled.length < 3) return []
+  const numeric = filled.filter(value => /^-?\d+(\.\d+)?$/.test(value)).length
+  if (numeric > filled.length * 0.3) return []
+  return row
+}
+
+/**
+ * Remember the codes a fallback match discovered, so the next import of the
+ * same survey needs no guessing. Only writes when every item has a bracketed
+ * export code.
+ */
+async function learnCodes(cfg, def, wave, mapping) {
+  const columns = mapping.items.map(item => item.column)
+  if (columns.some(column => !column || !/^\[[^\]]+\]/.test(String(column)))) return null
+  const codes = columns.map(column => headerCode(column))
+  const file = path.join(cfg.defsDir, `${def.id}.json`)
+  let raw
+  try {
+    raw = JSON.parse(await readFile(file, 'utf8'))
+  } catch {
+    return null
+  }
+  const before = JSON.stringify((raw.codes || {})[wave] || null)
+  raw.codes = { ...(raw.codes || {}), [wave]: codes }
+  if (JSON.stringify(raw.codes[wave]) === before) return null
+  await writeFileAtomic(file, JSON.stringify(raw, null, 2) + '\n')
+  await appendProvenance(cfg, {
+    action: 'learn-codes',
+    scale: def.id,
+    wave,
+    defVersion: def.version,
+    note: codes.slice(0, 6).join(' / '),
+    rows: codes.length
+  })
+  return codes
 }
 
 /* ------------------------------------------------------------------ *
@@ -1256,13 +1303,14 @@ export function apply(ctx, config = {}) {
       if (!body.length) {
         throw new RouteError('invalid', `「${source.sheet || filename}」只有表头、没有作答行。请确认导出时选的是回复数据（Raw Data / Responses），而不是空报告。`)
       }
+      const labels = detectLabelRow(table)
       let scale = String((payload && payload.scale) || '')
       let wave = String((payload && payload.wave) || '')
       let guessed = null
-      const targets = scanTargets(current.defs, header, body)
+      const targets = scanTargets(current.defs, header, body, labels)
       if (!scale || !wave) {
         const pool = scale ? current.defs.filter(def => def.id === scale) : current.defs
-        guessed = guessTarget(pool, header, filename)
+        guessed = guessTarget(pool, header, filename, labels)
         if (!guessed) {
           if (!targets.length) {
             throw new RouteError('invalid', `这份文件的列名对不上任何一份量表（前几列：${header.slice(0, 4).join(' / ')}）。可以手动选择目标量表与波次再预览。`)
@@ -1274,7 +1322,7 @@ export function apply(ctx, config = {}) {
       }
       const def = findDef(current, scale)
       requireWave(def, wave)
-      const mapping = mapImportColumns(def, wave, header, body)
+      const mapping = mapImportColumns(def, wave, header, body, labels)
       if (!mapping.idColumn) throw new RouteError('invalid', '没有找到编号列（列名需含「编号」或 participant）')
       const applied = applyImport(def, wave, table, mapping)
       const preview = applied.rows.slice(0, 5).map(row => {
@@ -1325,12 +1373,13 @@ export function apply(ctx, config = {}) {
       const table = parseTable(source.text)
       if (!table.length) throw new RouteError('invalid', '文件里没有可读的表格行')
       if (table.length < 2) throw new RouteError('invalid', `「${source.sheet || ''}」只有表头、没有作答行`)
+      const labels = detectLabelRow(table)
       const filename = String((payload && payload.filename) || '')
       let scale = String((payload && payload.scale) || '')
       let wave = String((payload && payload.wave) || '')
       if (!scale || !wave) {
         const pool = scale ? current.defs.filter(def => def.id === scale) : current.defs
-        const guessed = guessTarget(pool, table[0], filename)
+        const guessed = guessTarget(pool, table[0], filename, labels)
         if (!guessed) throw new RouteError('invalid', '认不出量表与波次，请明确指定')
         scale = scale || guessed.scale
         wave = wave || guessed.wave
@@ -1338,7 +1387,7 @@ export function apply(ctx, config = {}) {
       const def = findDef(current, scale)
       requireWave(def, wave)
       const header = table[0].map(value => String(value ?? '').trim())
-      let mapping = mapImportColumns(def, wave, header, table.slice(1))
+      let mapping = mapImportColumns(def, wave, header, table.slice(1), labels)
       const overrides = payload && payload.mapping
       if (overrides && Array.isArray(overrides.items)) {
         const byNo = new Map(overrides.items.map(item => [Number(item.no), item.column]))
@@ -1367,6 +1416,7 @@ export function apply(ctx, config = {}) {
         mode
       })
       await syncScores()
+      const learned = await learnCodes(cfg, def, wave, mapping)
       return {
         scale: def.id,
         wave,
@@ -1374,6 +1424,7 @@ export function apply(ctx, config = {}) {
         imported: applied.rows.length,
         total: rows.length,
         replaced: mode === 'replace' ? existing.length : Math.max(0, applied.rows.length - existing.length),
+        learned,
         issues: applied.issues.slice(0, 30),
         file: file ? file.file : path.join(cfg.answersDir, answerFileName(def.id, wave)).replace(/\\/g, '/')
       }
@@ -1392,7 +1443,8 @@ export function apply(ctx, config = {}) {
       const header = table[0].map(value => String(value ?? '').trim())
       const body = table.slice(1)
       const filename = String((payload && payload.filename) || '')
-      const targets = scanTargets(current.defs, header, body)
+      const labels = detectLabelRow(table)
+      const targets = scanTargets(current.defs, header, body, labels)
       if (!targets.length) {
         throw new RouteError('invalid', `这份文件的列名对不上任何一份量表（前几列：${header.slice(0, 4).join(' / ')}）。可以在预览里手动指定。`)
       }
@@ -1414,6 +1466,7 @@ export function apply(ctx, config = {}) {
           rows: applied.rows.length,
           mode
         })
+        const learned = await learnCodes(cfg, def, target.wave, target.mapping)
         results.push({
           scale: def.id,
           short: def.short,
@@ -1421,7 +1474,8 @@ export function apply(ctx, config = {}) {
           imported: applied.rows.length,
           total: rows.length,
           matched: target.matched,
-          totalItems: target.total
+          totalItems: target.total,
+          learned
         })
       }
       if (!results.length) throw new RouteError('invalid', '没有解析出任何一行带编号的作答')

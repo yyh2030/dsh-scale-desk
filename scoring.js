@@ -795,7 +795,47 @@ export function headerCode(name) {
   return match ? match[1].trim() : text
 }
 
-function itemColumnCandidates(def, wave, header, taken = new Set()) {
+/** Text used for fuzzy matching: lowercase, digits, latin and CJK only. */
+function normalizeText(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]/g, '')
+}
+
+function bigrams(text) {
+  const grams = new Set()
+  for (let i = 0; i < text.length - 1; i += 1) grams.add(text.slice(i, i + 2))
+  return grams
+}
+
+/**
+ * Similarity between a definition's item text and an export column label.
+ * Character bigrams work for Chinese without any tokenizer; an exact or
+ * contained text is trusted outright.
+ */
+export function textSimilarity(a, b) {
+  const left = normalizeText(a)
+  const right = normalizeText(b)
+  if (!left || !right) return 0
+  if (left === right) return 1
+  if (left.length >= 6 && right.includes(left)) return 0.95
+  if (right.length >= 6 && left.includes(right)) return 0.95
+  const gramsA = bigrams(left)
+  const gramsB = bigrams(right)
+  if (!gramsA.size || !gramsB.size) return 0
+  let shared = 0
+  for (const gram of gramsA) if (gramsB.has(gram)) shared += 1
+  return (2 * shared) / (gramsA.size + gramsB.size)
+}
+
+/** Label of a column for fuzzy matching: the export's sub-header row first. */
+function columnLabel(header, labels, at) {
+  const label = labels && labels[at] ? String(labels[at]).trim() : ''
+  if (label && !/^range$/i.test(label)) return label
+  return String(header[at] || '').replace(/^\[[^\]]*\]\s*/, '')
+}
+
+function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [], allowOrder = true, allowText = true) {
   const codes = def.codes[wave] || []
   const normalized = header.map(normalizeCode)
   const headerCodes = header.map(headerCode)
@@ -858,15 +898,59 @@ function itemColumnCandidates(def, wave, header, taken = new Set()) {
     }
     items.push({ no: item.no, code, column, how })
   }
+
+  // 3. 题面相似：题码缺失或对不上时，按题目文字认列。QuestionPro 的
+  //    第二行表头（矩阵行文本）就是最好的依据。
+  for (const item of items) {
+    if (!allowText || item.column) continue
+    const source = def.items.find(entry => entry.no === item.no)
+    const itemText = source && source.text ? String(source.text) : ''
+    if (!itemText) continue
+    let best = -1
+    let bestScore = 0
+    let secondScore = 0
+    for (let at = 0; at < header.length; at += 1) {
+      if (claimed.has(at)) continue
+      const score = textSimilarity(itemText, columnLabel(header, labels, at))
+      if (score > bestScore) {
+        secondScore = bestScore
+        bestScore = score
+        best = at
+      } else if (score > secondScore) {
+        secondScore = score
+      }
+    }
+    if (best >= 0 && bestScore >= 0.6 && bestScore - secondScore >= 0.1) {
+      item.column = header[best]
+      item.how = 'text'
+      claimed.add(best)
+    }
+  }
+
+  // 4. 顺序兜底：这个波次完全没有题码，而导出里正好有一组列数与题量相同，
+  //    就按列顺序对题号（矩阵导出天然是有序的）。
+  if (allowOrder && !codes.length && items.every(item => !item.column)) {
+    const open = [...groups.values()].filter(group => group.length === def.itemCount && group.every(at => !claimed.has(at)))
+    if (open.length === 1) {
+      open[0].forEach((at, index) => {
+        const item = items[index]
+        item.column = header[at]
+        item.how = 'order'
+        claimed.add(at)
+      })
+    }
+  }
+
   return { items, claimed }
 }
 
 /**
- * Map an export's header onto one definition at one wave. Codes are exact
- * contract; numbering patterns are a fallback. Anything still unmatched is
- * returned so the panel can offer a manual pick.
+ * Map an export's header onto one definition at one wave. Codes are the exact
+ * contract; numbering, the second header row (item texts) and the order of a
+ * single matrix block are fallbacks. Anything still unmatched is returned so
+ * the panel can offer a manual pick.
  */
-export function mapImportColumns(def, wave, header, rows) {
+export function mapImportColumns(def, wave, header, rows, labels = [], allowOrder = true, allowText = true) {
   const names = (header || []).map(name => String(name ?? '').trim())
   const id = findIdColumn(names, rows)
   // Claim the id column first: the screening export reuses `Q4` for both the
@@ -877,7 +961,7 @@ export function mapImportColumns(def, wave, header, rows) {
     const at = names.indexOf(id.column)
     if (at >= 0) taken.add(at)
   }
-  const { items, claimed } = itemColumnCandidates(def, wave, names, taken)
+  const { items, claimed } = itemColumnCandidates(def, wave, names, taken, labels, allowOrder, allowText)
   const extras = names.filter((name, at) => !claimed.has(at))
   const unmatched = items.filter(item => !item.column).map(item => item.no)
   return {
@@ -891,15 +975,22 @@ export function mapImportColumns(def, wave, header, rows) {
   }
 }
 
-/** Every (definition, wave) whose codes cover this header well enough. */
-export function scanTargets(defs, header, rows) {
+/** Every (definition, wave) whose header now maps well enough. */
+export function scanTargets(defs, header, rows, labels = []) {
+  const headerKeys = (header || []).map(name => normalizeCode(headerCode(name)))
   const targets = []
   for (const def of defs) {
     for (const wave of def.waves) {
-      const mapping = mapImportColumns(def, wave, header, rows)
+      const known = (def.codes[wave] || []).filter(Boolean)
+      // A wave whose codes were configured but did not hit is probably a
+      // different wave of the same instrument (identical item texts), so do
+      // not let text similarity pull it in automatically.
+      const mapping = mapImportColumns(def, wave, header, rows, labels, false, known.length === 0)
       if (!mapping.idColumn) continue
       const threshold = Math.max(1, Math.ceil(def.itemCount * 0.6))
       if (mapping.matched < threshold) continue
+      const codes = known.map(normalizeCode)
+      const codeHits = codes.length ? headerKeys.filter(key => codes.includes(key)).length : 0
       targets.push({
         scale: def.id,
         short: def.short,
@@ -907,15 +998,23 @@ export function scanTargets(defs, header, rows) {
         wave,
         matched: mapping.matched,
         total: mapping.total,
+        codeHits,
         mapping
       })
     }
   }
-  return targets.sort((a, b) => b.matched / b.total - a.matched / a.total)
+  // When a survey's own code names one wave (`t1_ftps`), a text-only match on
+  // another wave (`t0_ftps` shares the item texts) is noise: keep the coded one.
+  const bestHits = new Map()
+  for (const target of targets) {
+    bestHits.set(target.scale, Math.max(bestHits.get(target.scale) || 0, target.codeHits))
+  }
+  const filtered = targets.filter(target => (bestHits.get(target.scale) || 0) === 0 || target.codeHits > 0)
+  return filtered.sort((a, b) => (b.codeHits - a.codeHits) || (b.matched / b.total - a.matched / a.total))
 }
 
 /** Best (scale, wave) guess for a file, from its header codes first, name second. */
-export function guessTarget(defs, header, filename = '') {
+export function guessTarget(defs, header, filename = '', labels = []) {
   const names = (header || []).map(name => normalizeCode(headerCode(name)))
   const fileNorm = normalizeCode(filename)
   let best = null
@@ -924,8 +1023,9 @@ export function guessTarget(defs, header, filename = '') {
       const codes = (def.codes[wave] || []).map(normalizeCode)
       const fromHeader = names.filter(name => codes.includes(name)).length
       const fromFile = codes.filter(code => code && fileNorm.includes(code)).length
-      const mapping = mapImportColumns(def, wave, header || [])
-      const score = Math.max(fromHeader, fromFile) * 10 + mapping.matched
+      const known = (def.codes[wave] || []).filter(Boolean)
+      const mapping = mapImportColumns(def, wave, header || [], [], labels, false, known.length === 0)
+      const score = fromHeader * 100 + fromFile * 50 + mapping.matched
       const enough = fromHeader >= Math.max(2, Math.ceil(def.itemCount * 0.5)) || mapping.matched >= Math.ceil(def.itemCount * 0.8)
       if (!enough) continue
       if (!best || score > best.score) best = { scale: def.id, wave, score, exact: fromHeader }
