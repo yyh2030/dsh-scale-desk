@@ -1254,6 +1254,60 @@ export function apply(ctx, config = {}) {
       return { ids, removed, touched, perId }
     },
 
+    /** Rename one subject id everywhere (typos such as `0.22007` → `22007`). */
+    async bulkRenameSubjects(payload) {
+      const current = await model(false)
+      const from = normalizeId(payload && payload.from)
+      const to = normalizeId(payload && payload.to)
+      if (!from) throw new RouteError('invalid', '先填旧编号')
+      if (!to) throw new RouteError('invalid', '先填新编号')
+      if (from === to) throw new RouteError('invalid', '新旧编号一样，不用改')
+      const collision = current.answerFiles.some(file => file.rows.some(row => row.id === to))
+      let renamed = 0
+      let merged = 0
+      const touched = []
+      for (const file of current.answerFiles) {
+        if (!file.rows.some(row => row.id === from)) continue
+        const rows = []
+        const seen = new Set()
+        let fileRenamed = 0
+        let fileMerged = 0
+        for (const row of file.rows) {
+          const next = row.id === from ? { id: to, values: row.values } : row
+          if (row.id === from) fileRenamed += 1
+          const key = next.id + '|' + JSON.stringify(next.values)
+          if (seen.has(key)) {
+            fileMerged += 1
+            continue
+          }
+          seen.add(key)
+          rows.push(next)
+        }
+        const def = current.defs.find(item => item.id === file.scale)
+        await writeAnswerFile(cfg, file.scale, file.wave, rows, def ? def.itemCount : 0)
+        await appendProvenance(cfg, {
+          action: 'bulk-rename',
+          scale: file.scale,
+          wave: file.wave,
+          note: `${from} → ${to}：${fileRenamed} 行` + (fileMerged ? `，合并重复 ${fileMerged} 行` : '')
+        })
+        renamed += fileRenamed
+        merged += fileMerged
+        touched.push({ scale: file.scale, wave: file.wave, renamed: fileRenamed })
+      }
+      if (!renamed) throw new RouteError('invalid', `没有找到编号 ${from} 的作答`)
+      await syncScores()
+      return {
+        from,
+        to,
+        renamed,
+        merged,
+        touched,
+        collision,
+        warning: isValidId(to) ? null : `新编号「${to}」不是 5 位编号，后续校验仍会标出来`
+      }
+    },
+
     /** Remove one subject id from every answer file (test submissions, typos). */
     async deleteSubject(payload) {
       const current = await model(false)

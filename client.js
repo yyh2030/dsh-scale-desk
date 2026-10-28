@@ -1595,6 +1595,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const [error, setError] = useState('')
       const [manual, setManual] = useState('')
+      const [from, setFrom] = useState('')
+      const [to, setTo] = useState('')
 
       const load = useCallback(async () => {
         try {
@@ -1643,6 +1645,25 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const rename = async () => {
+        if (!from.trim() || !to.trim()) return
+        setBusy('rename')
+        setError('')
+        try {
+          const result = await call('bulkRenameSubjects', { from, to })
+          toast('已把 ' + result.renamed + ' 行从 ' + result.from + ' 改成 ' + result.to + (result.merged ? '，合并重复 ' + result.merged + ' 行' : ''))
+          if (result.warning) setError(result.warning)
+          setFrom('')
+          setTo('')
+          await load()
+          if (refresh) refresh()
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
       return h('div', { className: 'sd-card' },
         h('div', { className: 'sd-card-head' },
           h('h3', null, '批量清理'),
@@ -1668,18 +1689,51 @@ window.__ModuleLoader__.load({
                   h('th', null, '编号'),
                   h('th', { className: 'is-score' }, '行数'),
                   h('th', null, '原因'),
-                  h('th', null, '出现在')
+                  h('th', null, '出现在'),
+                  h('th', null, '')
                 )),
                 h('tbody', null, groups.map(group => h('tr', { key: group.id },
                   h('td', null, h('input', { type: 'checkbox', checked: Boolean(picked[group.id]), onChange: () => toggle(group.id) })),
                   h('td', { className: 'sd-mono' }, group.id),
                   h('td', { className: 'is-score' }, String(group.rows.length)),
                   h('td', { className: 'sd-note' }, [...group.reasons].join('；')),
-                  h('td', { className: 'sd-note', style: { maxWidth: 260 } }, [...group.where].slice(0, 6).join('、') + (group.where.size > 6 ? '…' : ''))
+                  h('td', { className: 'sd-note', style: { maxWidth: 260 } }, [...group.where].slice(0, 6).join('、') + (group.where.size > 6 ? '…' : '')),
+                  h('td', null, h(Btn, {
+                    children: '改号',
+                    kind: 'ghost',
+                    small: true,
+                    onClick: () => { setFrom(group.id); setTo('') }
+                  }))
                 )))
               )
             )
           : h('div', { className: 'sd-note' }, '没有编号可疑或重复的作答。'),
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('span', { className: 'sd-note' }, '批量改编号：'),
+          h('input', {
+            className: 'sd-input',
+            style: { width: 110, height: 26 },
+            value: from,
+            placeholder: '旧编号',
+            onChange: event => setFrom(event.target.value)
+          }),
+          h('span', { className: 'sd-note' }, '→'),
+          h('input', {
+            className: 'sd-input',
+            style: { width: 110, height: 26 },
+            value: to,
+            placeholder: '新编号',
+            onChange: event => setTo(event.target.value)
+          }),
+          Btn({
+            children: busy === 'rename' ? '改号中…' : '改',
+            kind: 'outline',
+            small: true,
+            disabled: Boolean(busy) || !from.trim() || !to.trim(),
+            onClick: rename
+          }),
+          h('span', { className: 'sd-note' }, '跨所有量表与波次；改完自动重算')
+        ),
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           Btn({
             children: busy === 'remove' ? '删除中…' : '删除选中编号的数据（' + selected.length + '）',
