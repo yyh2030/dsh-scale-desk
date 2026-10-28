@@ -84,7 +84,11 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 
 ## 三条入口
 
-1. **外部导入**：QuestionPro / 问卷星 / Excel 另存的 CSV 或 TSV。列名先认导出码（`t0_stais_01`），认不出再认 `Q1` / `第1题` / 纯数字列；预览时可手动改每题对应哪一列。UTF-8、GBK、GB18030 都试一遍再解码。导入只存原始文本，越界值不修，留给校验报出来。
+1. **外部导入**：QuestionPro / 问卷星 / Excel 的 `.xlsx`、CSV、TSV 都认。Excel 走本机 Python（openpyxl）转成表格，优先读 `Raw Data` 工作表；CSV 先试 UTF-8，再试 GBK / GB18030。列名先认导出码（`t0_stais_01`），认不出再认 `Q1` / `第1题` / 纯数字列；预览时可手动改每题对应哪一列。导入只存原始文本，越界值不修，留给校验报出来。
+
+   - 一次可以选多个文件，批量预览后逐个或一次导入；每个文件单独显示识别到的量表、波次、行数与匹配数。
+   - QuestionPro 导出里 `Response ID` 不会抢走编号列：有 `participant` / `编号` 之类列时优先用它。
+   - 导出时如果选成了汇总报告，`Raw Data` 只有一行表头，预览会直接提示「只有表头、没有作答行」，不会当成乱码报错。
 2. **手工录入**：选量表、波次、编号，在答题纸上作答。档位题用按钮（超过 12 档自动换成数字框），选择题用选项按钮，数值题用数字框，文本题用输入框；文本、选项与数值都按原文落盘。已录过的会载入原值，改完再存。反向题在答题纸上标橙底（主试视角；被试问卷里不该出现反向标记）。
 3. **以后** PsychoPy 问卷模块直接写 `answers/*.csv`，格式一样即可。
 
@@ -139,7 +143,7 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 - `POST {action:'createScale', payload:{id, name, short, itemCount, min, max, waves, scoringType, reverse, minAnswered}}` —— 新建定义
 - `POST {action:'saveMeta', payload:{scale, name, short, version, notes, instructions, scoringType?, reverse?, minAnswered?}}` —— 改基本信息与计分设置
 - `POST {action:'deleteScale', payload:{scale}}` —— 删定义（有作答则拒绝；同时移除流程里引用它的步骤）
-- `POST {action:'importPreview', payload:{data|text, filename, scale?, wave?}}` —— 识别映射，不写盘
+- `POST {action:'importPreview', payload:{data|text, filename, scale?, wave?}}` —— 识别映射，不写盘（`data` 可以是 CSV/TSV 的 base64，也可以是 `.xlsx` 的 base64）
 - `POST {action:'importApply', payload:{data|text, filename, scale, wave, mode, mapping}}` —— 落盘（`merge` / `replace`）
 - `POST {action:'score'}` —— 重算并写 `scores.csv` + `scores_detail.csv` + `data_wide.csv`
 - `POST {action:'validate'}` —— 重新校验
@@ -193,13 +197,13 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
     projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文'
 ```
 
-`labDir` 默认 `<projectRoot>/_lab`，`scalesDir` 默认 `<labDir>/scales`；`subjectsPath` 默认 `<labDir>/subjects.csv`（有就用来列出「已入组但还没量表」的人，没有就只列已录过量表的人）。
+`labDir` 默认 `<projectRoot>/_lab`，`scalesDir` 默认 `<labDir>/scales`；`subjectsPath` 默认 `<labDir>/subjects.csv`（有就用来列出「已入组但还没量表」的人，没有就只列已录过量表的人）。`pythonPath` 默认指向 DSH 自带的 Python，用于把 `.xlsx` 转成表格（需要 openpyxl）；换运行环境时在 config 里覆盖它。
 
 改 Host 代码要重启 app；改 client 在「设置 → 插件」里把本插件关掉再打开，然后刷新页面。
 
 ## 测试
 
 ```powershell
-node --test tests/scoring.test.mjs   # 30 项：定义、反向、折算、乘数、题型与选项、列名、重复编号、粘贴解析、导入映射、校验、CSV
+node --test tests/scoring.test.mjs   # 31 项：定义、反向、折算、乘数、题型与选项、列名、重复编号、粘贴解析、导入映射（含 QuestionPro 表头）、校验、CSV
 node tests/smoke.mjs                 # 临时目录跑完整链路：播种 25 份问卷与流程 → 导入 → 手填（含文本题）→ 重复/改号/删行 → 建库/改库/删库 → 计分 → 导出（含宽表）→ 工具 → 题面 → 波次
 ```

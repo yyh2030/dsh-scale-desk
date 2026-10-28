@@ -1094,95 +1094,129 @@ window.__ModuleLoader__.load({
     }
 
     function ImportPanel({ data, toast, onImported }) {
+      const [files, setFiles] = useState([])
       const [text, setText] = useState('')
-      const [base64, setBase64] = useState('')
-      const [filename, setFilename] = useState('')
-      const [scaleId, setScaleId] = useState('')
-      const [wave, setWave] = useState('')
-      const [preview, setPreview] = useState(null)
-      const [issues, setIssues] = useState([])
+      const [previews, setPreviews] = useState([])
+      const [focus, setFocus] = useState(0)
       const [mode, setMode] = useState('merge')
       const [busy, setBusy] = useState('')
       const [error, setError] = useState('')
       const [over, setOver] = useState(false)
       const fileRef = useRef(null)
-      const inputRef = useRef(null)
 
-      const readFile = useCallback(async file => {
-        if (!file) return
-        const buffer = await file.arrayBuffer()
-        const bytes = new Uint8Array(buffer)
-        let binary = ''
-        for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
-        setBase64(btoa(binary))
+      const readFiles = useCallback(async fileList => {
+        const list = Array.from(fileList || [])
+        const next = []
+        for (const file of list) {
+          const buffer = await file.arrayBuffer()
+          const bytes = new Uint8Array(buffer)
+          let binary = ''
+          for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i])
+          next.push({ name: file.name || '文件 ' + (next.length + 1), base64: btoa(binary) })
+        }
+        setFiles(next)
         setText('')
-        setFilename(file.name || '')
-        setPreview(null)
-        setIssues([])
+        setPreviews([])
+        setFocus(0)
         setError('')
+        if (fileRef.current) fileRef.current.value = ''
       }, [])
 
-      const previewNow = async () => {
-        if (!base64 && !text) {
-          setError('先选一个 CSV / TSV 导出文件')
+      const sources = () => {
+        if (files.length) return files.map(file => ({ name: file.name, base64: file.base64 }))
+        if (text.trim()) return [{ name: '粘贴的文本', text }]
+        return []
+      }
+
+      const previewAll = async () => {
+        const list = sources()
+        if (!list.length) {
+          setError('先选导出文件（CSV / TSV / Excel），或粘贴表格文本')
           return
         }
         setBusy('preview')
         setError('')
-        try {
-          const payload = base64
-            ? { data: base64, filename, scale: scaleId || undefined, wave: wave || undefined }
-            : { text, filename, scale: scaleId || undefined, wave: wave || undefined }
-          const next = await call('importPreview', payload)
-          setPreview(next)
-          setIssues(next.issues || [])
-          if (!scaleId) setScaleId(next.scale)
-          if (!wave) setWave(next.wave)
-        } catch (err) {
-          setError(err.message)
-          setPreview(null)
-        } finally {
-          setBusy('')
+        const results = []
+        for (const source of list) {
+          try {
+            const payload = source.base64
+              ? { data: source.base64, filename: source.name }
+              : { text: source.text, filename: source.name }
+            const next = await call('importPreview', payload)
+            results.push({ ...source, status: 'ok', data: next, imported: false })
+          } catch (err) {
+            results.push({ ...source, status: 'error', error: err.message })
+          }
         }
+        setPreviews(results)
+        const firstOk = results.findIndex(item => item.status === 'ok')
+        setFocus(firstOk >= 0 ? firstOk : 0)
+        setBusy('')
       }
 
-      const apply = async () => {
-        if (!preview) return
-        setBusy('apply')
+      const applyEntry = async entry => {
+        const payload = {
+          data: entry.base64 || undefined,
+          text: entry.text || undefined,
+          filename: entry.name,
+          scale: entry.data.scale,
+          wave: entry.data.wave,
+          mode,
+          mapping: entry.data.mapping
+        }
+        return call('importApply', payload)
+      }
+
+      const importAt = async index => {
+        const entry = previews[index]
+        if (!entry || entry.status !== 'ok' || entry.imported) return
+        setBusy('apply-' + index)
         setError('')
         try {
-          const payload = {
-            data: base64 || undefined,
-            text: base64 ? undefined : text,
-            filename,
-            scale: preview.scale,
-            wave: preview.wave,
-            mode,
-            mapping: preview.mapping
-          }
-          const result = await call('importApply', payload)
-          toast('已导入 ' + result.imported + ' 行到 ' + result.scale + ' ' + waveName(result.wave) + '（现共 ' + result.total + ' 人）')
-          setPreview(null)
-          setIssues([])
-          setText('')
-          setBase64('')
-          setFilename('')
-          if (inputRef.current) inputRef.current.value = ''
-          onImported()
+          const result = await applyEntry(entry)
+          toast('已导入 ' + entry.name + '：' + result.imported + ' 行到 ' + result.scale + ' ' + waveName(result.wave) + '（现共 ' + result.total + ' 人）')
+          setPreviews(prev => prev.map((item, at) => at === index ? { ...item, imported: true } : item))
+          if (onImported) onImported()
         } catch (err) {
-          setError(err.message)
+          setError(entry.name + '：' + err.message)
         } finally {
           setBusy('')
         }
       }
 
-      const headers = preview ? preview.header : []
+      const importAll = async () => {
+        const pending = previews
+          .map((entry, index) => ({ entry, index }))
+          .filter(item => item.entry.status === 'ok' && !item.entry.imported)
+        if (!pending.length) return
+        setBusy('apply-all')
+        setError('')
+        let done = 0
+        const failed = []
+        for (const item of pending) {
+          try {
+            const result = await applyEntry(item.entry)
+            done += 1
+            setPreviews(prev => prev.map((entry, index) => index === item.index ? { ...entry, imported: true } : entry))
+          } catch (err) {
+            failed.push(item.entry.name + '：' + err.message)
+          }
+        }
+        setBusy('')
+        if (done) toast('已导入 ' + done + ' 个文件')
+        if (failed.length) setError(failed.join('；'))
+        if (onImported) onImported()
+      }
+
+      const focused = previews[focus]
+      const headers = focused && focused.status === 'ok' ? focused.data.header : []
+      const okCount = previews.filter(item => item.status === 'ok' && !item.imported).length
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
         h('div', { className: 'sd-card' },
           h('div', { className: 'sd-card-head' },
             h('h3', null, '导入问卷平台导出'),
-            h('span', { className: 'sd-note' }, 'QuestionPro / 问卷星 / Excel 另存的 CSV 与 TSV；UTF-8 与 GBK 都认')
+            h('span', { className: 'sd-note' }, 'Excel（.xlsx）、CSV、TSV 都认；UTF-8 与 GBK 都试一遍')
           ),
           h('div', {
             className: 'sd-drop' + (over ? ' is-over' : ''),
@@ -1193,45 +1227,33 @@ window.__ModuleLoader__.load({
             onDrop: event => {
               event.preventDefault()
               setOver(false)
-              const file = event.dataTransfer.files && event.dataTransfer.files[0]
-              readFile(file)
+              readFiles(event.dataTransfer.files)
             },
             onClick: () => fileRef.current && fileRef.current.click()
           },
-            h('strong', null, '把导出文件拖到这里，或点一下选文件'),
-            h('span', null, '列名会被映射到量表题号：先认导出码（如 t0_stais_01），认不出再按 Q1 / 第1题')
+            h('strong', null, '把导出文件拖到这里，或点一下选文件（可多选）'),
+            h('span', null, 'QuestionPro 选「Data Export / Raw Data」那一份；只有表头的空报告会被标出来')
           ),
-          h('input', { ref: fileRef, type: 'file', accept: '.csv,.tsv,.txt', style: { display: 'none' }, onChange: event => readFile(event.target.files && event.target.files[0]) }),
-          h('div', { className: 'sd-field' },
-            h('label', null, '目标量表'),
-            h('select', {
-              className: 'sd-select',
-              value: scaleId,
-              onChange: event => { setScaleId(event.target.value); setWave(''); setPreview(null); setIssues([]) }
-            },
-              h('option', { value: '' }, '按列名自动识别'),
-              data.instruments.map(item => h('option', { key: item.id, value: item.id }, item.short))
-            ),
-            h('label', null, '波次'),
-            h('select', {
-              className: 'sd-select',
-              style: { maxWidth: 150 },
-              value: wave,
-              onChange: event => { setWave(event.target.value); setPreview(null); setIssues([]) }
-            },
-              h('option', { value: '' }, '按列名自动识别'),
-              (scaleId
-                ? ((data.instruments.find(item => item.id === scaleId) || {}).waves || [])
-                : ['T0', 'T1', 'T2', 'week']
-              ).map(item => h('option', { key: item, value: item }, waveName(item)))
-            ),
-            h('span', { className: 'sd-note' }, '认不出列名时才需要手动指定；正常情况留「自动识别」')
-          ),
-          filename
-            ? h('div', { className: 'sd-file' },
-                h('span', null, '已选：', h('b', null, filename)),
-                h('span', { className: 'sd-note' }, base64 ? Math.round((base64.length * 0.75) / 1024) + ' KB' : ''),
-                Btn({ children: '清除', kind: 'ghost', small: true, onClick: () => { setFilename(''); setBase64(''); setText(''); setPreview(null); if (fileRef.current) fileRef.current.value = '' } })
+          h('input', {
+            ref: fileRef,
+            type: 'file',
+            accept: '.xlsx,.csv,.tsv,.txt',
+            multiple: true,
+            style: { display: 'none' },
+            onChange: event => readFiles(event.target.files)
+          }),
+          files.length
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                files.map((file, index) => h('div', { className: 'sd-file', key: index },
+                  h('span', null, h('b', null, file.name)),
+                  h('span', { className: 'sd-note' }, Math.round((file.base64.length * 0.75) / 1024) + ' KB'),
+                  h(Btn, {
+                    children: '移除',
+                    kind: 'ghost',
+                    small: true,
+                    onClick: () => setFiles(prev => prev.filter((_, at) => at !== index))
+                  })
+                ))
               )
             : null,
           h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
@@ -1242,28 +1264,90 @@ window.__ModuleLoader__.load({
                 style: { width: '100%', height: 110, marginTop: 8, padding: 8, fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 11.5, resize: 'vertical' },
                 value: text,
                 placeholder: '编号,t0_ftps_01,...',
-                onChange: event => { setText(event.target.value); setBase64(''); if (event.target.value) setFilename('') }
+                onChange: event => { setText(event.target.value); setFiles([]); setPreviews([]) }
               })
             ),
             h('div', { style: { display: 'flex', gap: 6 } },
-              Btn({ children: busy === 'preview' ? '识别中…' : '预览映射', kind: 'outline', onClick: previewNow, disabled: busy === 'preview' || (!base64 && !text) })
+              Btn({ children: busy === 'preview' ? '识别中…' : '预览全部', kind: 'outline', onClick: previewAll, disabled: Boolean(busy) || !sources().length }),
+              previews.length
+                ? Btn({ children: '清空', kind: 'ghost', onClick: () => { setPreviews([]); setFiles([]); setText(''); setError('') } })
+                : null
             )
           )
         ),
         error ? h('div', { className: 'sd-alert sd-alert-bad' }, error) : null,
-        preview
+        previews.length
           ? h('div', { className: 'sd-card' },
               h('div', { className: 'sd-card-head' },
-                h('h3', null, '预览：' + preview.scaleName + ' · ' + waveName(preview.wave)),
-                h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
-                  h('span', { className: 'sd-note' }, '编号列：', h('b', null, preview.mapping.idColumn)),
-                  h('span', { className: 'sd-chip' }, '匹配 ' + preview.mapping.matched + '/' + preview.mapping.total),
-                  h('span', { className: 'sd-chip' }, preview.rows + ' 行'),
-                  preview.emptyCells ? h('span', { className: 'sd-chip' }, '空格 ' + preview.emptyCells) : null
+                h('h3', null, '待导入 ' + previews.length + ' 份'),
+                h('span', { className: 'sd-note' }, '点一行看它的映射；每份可以单独导入'),
+                h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+                  Btn({ children: busy === 'apply-all' ? '导入中…' : '导入全部可识别（' + okCount + '）', kind: 'primary', small: true, disabled: Boolean(busy) || !okCount, onClick: importAll })
                 )
               ),
-              preview.mapping.unmatched.length
-                ? h('div', { className: 'sd-alert sd-alert-warn', style: { margin: 0 } }, '有 ' + preview.mapping.unmatched.length + ' 题没认到列：第 ' + preview.mapping.unmatched.join('、') + ' 题。可在下面手动指定，否则按缺失处理。')
+              h('div', { className: 'sd-table-wrap', style: { maxHeight: 'none' } },
+                h('table', { className: 'sd-table', style: { minWidth: 720 } },
+                  h('thead', null, h('tr', null,
+                    h('th', null, '文件'),
+                    h('th', null, '工作表'),
+                    h('th', null, '识别为'),
+                    h('th', { className: 'is-score' }, '行'),
+                    h('th', { className: 'is-score' }, '匹配'),
+                    h('th', null, '状态'),
+                    h('th', null, '')
+                  )),
+                  h('tbody', null, previews.map((entry, index) => {
+                    const ok = entry.status === 'ok'
+                    return h('tr', {
+                      key: index,
+                      className: focus === index ? 'is-open' : '',
+                      onClick: () => setFocus(index)
+                    },
+                      h('td', { className: 'sd-mono' }, entry.name),
+                      h('td', { className: 'sd-note' }, ok ? entry.data.sheet || '—' : ''),
+                      h('td', null, ok ? entry.data.scale + ' · ' + waveName(entry.data.wave) : '—'),
+                      h('td', { className: 'is-score' }, ok ? String(entry.data.rows) : ''),
+                      h('td', { className: 'is-score' }, ok ? entry.data.mapping.matched + '/' + entry.data.mapping.total : ''),
+                      h('td', null, entry.imported
+                        ? h('span', { className: 'sd-badge sd-badge-ok' }, '已导入')
+                        : ok
+                          ? h('span', { className: 'sd-badge sd-badge-info' }, entry.data.rows + ' 行')
+                          : h('span', { className: 'sd-badge sd-badge-bad', title: entry.error }, '认不出')),
+                      h('td', null, ok && !entry.imported
+                        ? h(Btn, {
+                            children: busy === 'apply-' + index ? '导入中…' : '导入',
+                            kind: 'outline',
+                            small: true,
+                            disabled: Boolean(busy),
+                            onClick: event => { event.stopPropagation(); importAt(index) }
+                          })
+                        : h('span', { className: 'sd-note' }, ok ? '' : entry.error || ''))
+                    )
+                  }))
+                )
+              ),
+              h('div', { className: 'sd-field' },
+                h('div', { className: 'sd-field' },
+                  h('label', null, h('input', { type: 'radio', name: 'sd-mode', checked: mode === 'merge', onChange: () => setMode('merge') }), ' 合并（同编号同答案原位替换，不同答案会留两行待核对）'),
+                  h('label', null, h('input', { type: 'radio', name: 'sd-mode', checked: mode === 'replace', onChange: () => setMode('replace') }), ' 覆盖整份')
+                )
+              )
+            )
+          : null,
+        focused && focused.status === 'ok'
+          ? h('div', { className: 'sd-card' },
+              h('div', { className: 'sd-card-head' },
+                h('h3', null, '映射：' + focused.name),
+                h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
+                  h('span', { className: 'sd-note' }, '编号列：', h('b', null, focused.data.mapping.idColumn)),
+                  h('span', { className: 'sd-chip' }, focused.data.scaleName + ' · ' + waveName(focused.data.wave)),
+                  h('span', { className: 'sd-chip' }, '匹配 ' + focused.data.mapping.matched + '/' + focused.data.mapping.total),
+                  h('span', { className: 'sd-chip' }, focused.data.rows + ' 行'),
+                  focused.data.emptyCells ? h('span', { className: 'sd-chip' }, '空格 ' + focused.data.emptyCells) : null
+                )
+              ),
+              focused.data.mapping.unmatched.length
+                ? h('div', { className: 'sd-alert sd-alert-warn', style: { margin: 0 } }, '有 ' + focused.data.mapping.unmatched.length + ' 题没认到列：第 ' + focused.data.mapping.unmatched.join('、') + ' 题。可在下面手动指定，否则按缺失处理。')
                 : null,
               h('div', { className: 'sd-table-wrap', style: { maxHeight: 'none' } },
                 h('table', { className: 'sd-table' },
@@ -1273,7 +1357,7 @@ window.__ModuleLoader__.load({
                     h('th', { className: 'is-score' }, '缺'),
                     h('th', null, '分量表预览')
                   )),
-                  h('tbody', null, preview.preview.map(row => h('tr', { key: row.id },
+                  h('tbody', null, focused.data.preview.map(row => h('tr', { key: row.id },
                     h('td', { className: 'sd-sticky sd-id' }, row.id),
                     h('td', { className: 'is-score' }, String(row.answered)),
                     h('td', { className: 'is-score' }, row.missing ? String(row.missing) : ''),
@@ -1282,9 +1366,9 @@ window.__ModuleLoader__.load({
                 )
               ),
               h('details', { className: 'sd-details' },
-                h('summary', null, '手动改列对应（' + preview.mapping.total + ' 题）'),
+                h('summary', null, '手动改列对应（' + focused.data.mapping.total + ' 题）'),
                 h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 6, marginTop: 8 } },
-                  preview.mapping.items.map(item => h('div', { key: item.no, style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                  focused.data.mapping.items.map(item => h('div', { key: item.no, style: { display: 'flex', gap: 6, alignItems: 'center' } },
                     h('span', { className: 'sd-note', style: { width: 34 } }, '第' + item.no),
                     h('select', {
                       className: 'sd-select',
@@ -1292,13 +1376,14 @@ window.__ModuleLoader__.load({
                       value: item.column || '',
                       onChange: event => {
                         const column = event.target.value || null
-                        setPreview(prev => ({
-                          ...prev,
-                          mapping: {
-                            ...prev.mapping,
-                            items: prev.mapping.items.map(entry => entry.no === item.no ? { ...entry, column, how: 'manual' } : entry),
-                            matched: prev.mapping.items.filter(entry => (entry.no === item.no ? column : entry.column)).length
+                        setPreviews(prev => prev.map((entry, index) => {
+                          if (index !== focus || entry.status !== 'ok') return entry
+                          const mapping = {
+                            ...entry.data.mapping,
+                            items: entry.data.mapping.items.map(candidate => candidate.no === item.no ? { ...candidate, column, how: 'manual' } : candidate),
+                            matched: entry.data.mapping.items.filter(candidate => (candidate.no === item.no ? column : candidate.column)).length
                           }
+                          return { ...entry, data: { ...entry.data, mapping } }
                         }))
                       }
                     },
@@ -1308,23 +1393,21 @@ window.__ModuleLoader__.load({
                   ))
                 )
               ),
-              issues.length
+              focused.data.issues && focused.data.issues.length
                 ? h('div', { className: 'sd-issues' },
-                    issues.slice(0, 12).map((item, index) => h('div', { className: 'sd-issue', key: index },
+                    focused.data.issues.slice(0, 12).map((item, index) => h('div', { className: 'sd-issue', key: index },
                       h('span', { className: 'sd-badge sd-badge-' + (item.level === 'bad' ? 'bad' : item.level === 'warn' ? 'warn' : 'info') }, LEVEL_TEXT[item.level] || '提示'),
                       h('span', { className: 'sd-issue-body' }, item.text)
                     ))
                   )
                 : null,
-              h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
-                h('div', { className: 'sd-field' },
-                  h('label', null, h('input', { type: 'radio', name: 'sd-mode', checked: mode === 'merge', onChange: () => setMode('merge') }), ' 合并（同编号以新数据为准）'),
-                  h('label', null, h('input', { type: 'radio', name: 'sd-mode', checked: mode === 'replace', onChange: () => setMode('replace') }), ' 覆盖整份')
-                ),
-                h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
-                  Btn({ children: '取消', kind: 'ghost', onClick: () => setPreview(null) }),
-                  Btn({ children: busy === 'apply' ? '导入中…' : '确认导入', kind: 'primary', onClick: apply, disabled: busy === 'apply' })
-                )
+              h('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+                Btn({
+                  children: busy === 'apply-' + focus ? '导入中…' : focused.imported ? '已导入' : '导入这一份',
+                  kind: 'primary',
+                  disabled: Boolean(busy) || focused.imported,
+                  onClick: () => importAt(focus)
+                })
               )
             )
           : null,
@@ -1334,7 +1417,7 @@ window.__ModuleLoader__.load({
             ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
                 data.imports.map((entry, index) => h('div', { key: index, style: { display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11.5 } },
                   h('span', { className: 'sd-note mono' }, String(entry.at || '').replace('T', ' ').slice(0, 16)),
-                  h('span', { className: 'sd-chip' }, entry.action === 'import' ? '导入' : entry.action === 'manual' ? '手填' : '删除'),
+                  h('span', { className: 'sd-chip' }, entry.action === 'import' ? '导入' : entry.action === 'manual' ? '手填' : entry.action === 'keep-one' ? '留一份' : entry.action === 'rename' ? '改号' : entry.action === 'delete-row' ? '删行' : '删除'),
                   h('span', { className: 'sd-mono' }, entry.scale + ' ' + entry.wave),
                   h('span', { className: 'sd-note' }, entry.file || entry.note || ''),
                   h('span', { className: 'sd-note', style: { marginLeft: 'auto' } }, entry.rows ? entry.rows + ' 行' : '')

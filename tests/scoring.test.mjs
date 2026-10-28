@@ -338,6 +338,15 @@ test('item text paste refuses mixed numbering instead of guessing', () => {
   assert.ok(mixed.issues.some(item => item.level === 'bad' && /混在一起/.test(item.text)))
 })
 
+test('QuestionPro header: the participant column wins over Response ID', () => {
+  const def = byId('FTPS')
+  const header = ['Response ID', 't2_participant_id', ...def.codes.T2]
+  const mapping = mapImportColumns(def, 'T2', header)
+  assert.equal(mapping.idColumn, 't2_participant_id')
+  assert.equal(mapping.matched, 10)
+  assert.equal(mapping.unmatched.length, 0)
+})
+
 test('choice and text items keep raw answers without scoring', () => {
   const def = byId('BODY_STATE')
   const result = scoreAnswers(def, {

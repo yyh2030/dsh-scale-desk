@@ -736,19 +736,26 @@ export function wideCsv(defs, scores, answerRows) {
  * import mapping
  * ------------------------------------------------------------------ */
 
-const ID_ALIASES = [
-  '编号', '被试编号', '参与者编号', '用户编号', '问卷编号', 'participant', 'participantid', 'respondent', 'respondentid',
-  'pid', 'subject', 'subjectid', 'subjectid', 'id', 'responseid', 'responseidentifier', 'externalreference'
+// Strong aliases name the participant; weak ones (Response ID etc.) only count
+// when nothing better exists — QuestionPro puts both in the same header row.
+const STRONG_ID_ALIASES = [
+  '编号', '被试编号', '参与者编号', '用户编号', '问卷编号',
+  'participant', 'participantid', 'respondent', 'respondentid', 'pid', 'subject', 'subjectid'
 ]
+const WEAK_ID_ALIASES = ['id', 'responseid', 'responseidentifier', 'externalreference']
 
 function findIdColumn(header, rows) {
   const normalized = header.map(normalizeCode)
-  for (const alias of ID_ALIASES) {
+  for (const alias of STRONG_ID_ALIASES) {
     const at = normalized.indexOf(normalizeCode(alias))
     if (at >= 0) return { column: header[at], how: 'alias' }
   }
   const fuzzy = header.findIndex(name => /编号|participant|respondent|subject/i.test(String(name)))
   if (fuzzy >= 0) return { column: header[fuzzy], how: 'fuzzy' }
+  for (const alias of WEAK_ID_ALIASES) {
+    const at = normalized.indexOf(normalizeCode(alias))
+    if (at >= 0) return { column: header[at], how: 'weak-alias' }
+  }
   // Last resort: a column whose every non-empty cell is a valid subject id.
   if (Array.isArray(rows) && rows.length) {
     for (let i = 0; i < header.length; i += 1) {

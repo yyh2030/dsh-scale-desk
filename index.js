@@ -9,8 +9,10 @@
  * Data contract (see README): answers are primary, scores are a cache.
  */
 
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -45,7 +47,8 @@ const MAX_BODY = 8 * 1024 * 1024
 const MAX_ISSUES = 300
 
 const DEFAULTS = {
-  projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文'
+  projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文',
+  pythonPath: 'C:/Users/16787/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe'
 }
 
 const KIND_LABEL = { scale: '量表', task: '任务', paper: '纸质', demo: '人口学', audio: '音频', text: '书写', survey: '问卷', rest: '练习' }
@@ -137,15 +140,6 @@ function decodeBuffer(buf) {
   return buf.toString('utf8')
 }
 
-function decodePayload(payload) {
-  const encoded = payload && payload.data
-  if (typeof encoded === 'string' && encoded) {
-    return decodeBuffer(Buffer.from(encoded, 'base64'))
-  }
-  if (payload && typeof payload.text === 'string') return payload.text
-  throw new RouteError('invalid', '没有收到文件内容')
-}
-
 async function readJson(file, fallback) {
   try {
     return JSON.parse(await readFile(file, 'utf8'))
@@ -182,6 +176,93 @@ function stampForName(now = new Date()) {
 }
 
 /* ------------------------------------------------------------------ *
+ * xlsx → csv (through the bundled Python, which has openpyxl)
+ * ------------------------------------------------------------------ */
+
+function isZipBuffer(buffer) {
+  return buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04
+}
+
+function isOleBuffer(buffer) {
+  return buffer.length > 8
+    && buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0
+}
+
+function runPython(pythonPath, args, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonPath, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      reject(new Error('读取 Excel 超时'))
+    }, timeoutMs)
+    child.stdout.on('data', chunk => {
+      stdout += chunk
+      if (stdout.length > 32 * 1024 * 1024) child.kill()
+    })
+    child.stderr.on('data', chunk => {
+      stderr += String(chunk)
+    })
+    child.on('error', error => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(new Error('无法启动 Python 读取 Excel：' + error.message))
+    })
+    child.on('close', code => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (code !== 0) {
+        reject(new Error('读取 Excel 失败：' + (stderr.trim() || 'exit ' + code).slice(0, 400)))
+        return
+      }
+      resolve(stdout)
+    })
+  })
+}
+
+async function convertXlsx(buffer, cfg) {
+  const file = path.join(tmpdir(), `scale-desk-${process.pid}-${randomUUID()}.xlsx`)
+  await writeFile(file, buffer)
+  try {
+    const output = await runPython(cfg.pythonPath, [cfg.xlsxScript, file])
+    let parsed
+    try {
+      parsed = JSON.parse(output)
+    } catch {
+      throw new Error('Excel 解析结果无法读取')
+    }
+    if (!parsed || typeof parsed.csv !== 'string') throw new Error('Excel 里没有可读的表格')
+    return { text: parsed.csv, sheet: String(parsed.sheet || '') }
+  } finally {
+    await unlink(file).catch(() => {})
+  }
+}
+
+/** Turn an import payload (base64 file or pasted text) into CSV text. */
+async function tableFromPayload(payload, cfg) {
+  const encoded = payload && payload.data
+  if (typeof encoded === 'string' && encoded) {
+    const buffer = Buffer.from(encoded, 'base64')
+    if (isZipBuffer(buffer)) {
+      const converted = await convertXlsx(buffer, cfg)
+      return converted
+    }
+    if (isOleBuffer(buffer)) {
+      throw new RouteError('invalid', '这是旧版 .xls 文件，请在 Excel 里另存为 .xlsx 或 CSV 再导入')
+    }
+    return { text: decodeBuffer(buffer), sheet: '' }
+  }
+  if (payload && typeof payload.text === 'string') return { text: payload.text, sheet: '' }
+  throw new RouteError('invalid', '没有收到文件内容')
+}
+
+/* ------------------------------------------------------------------ *
  * config
  * ------------------------------------------------------------------ */
 
@@ -202,7 +283,9 @@ function resolveConfig(config = {}) {
     widePath: path.join(labDir, 'data_wide.csv').replace(/\\/g, '/'),
     exportDir: path.join(labDir, 'export').replace(/\\/g, '/'),
     flowPath: path.join(scalesDir, 'flow.json').replace(/\\/g, '/'),
-    subjectsPath: String(config.subjectsPath || join('_lab', 'subjects.csv')).replace(/\\/g, '/')
+    subjectsPath: String(config.subjectsPath || join('_lab', 'subjects.csv')).replace(/\\/g, '/'),
+    pythonPath: path.resolve(String(config.pythonPath || DEFAULTS.pythonPath).replace(/\\/g, '/')),
+    xlsxScript: path.join(HERE, 'xlsx_dump.py')
   }
 }
 
@@ -1147,12 +1230,15 @@ export function apply(ctx, config = {}) {
 
     async importPreview(payload) {
       const current = await model(false)
-      const text = decodePayload(payload)
-      const table = parseTable(text)
+      const source = await tableFromPayload(payload, cfg)
+      const table = parseTable(source.text)
       if (!table.length) throw new RouteError('invalid', '文件里没有可读的表格行')
       const header = table[0].map(value => String(value ?? '').trim())
       const body = table.slice(1)
       const filename = String((payload && payload.filename) || '')
+      if (!body.length) {
+        throw new RouteError('invalid', `「${source.sheet || filename}」只有表头、没有作答行。请确认导出时选的是回复数据（Raw Data / Responses），而不是空报告。`)
+      }
       let scale = String((payload && payload.scale) || '')
       let wave = String((payload && payload.wave) || '')
       let guessed = null
@@ -1181,6 +1267,7 @@ export function apply(ctx, config = {}) {
       })
       return {
         filename,
+        sheet: source.sheet,
         guessed,
         scale: def.id,
         scaleName: def.name,
@@ -1205,9 +1292,10 @@ export function apply(ctx, config = {}) {
 
     async importApply(payload) {
       const current = await model(false)
-      const text = decodePayload(payload)
-      const table = parseTable(text)
+      const source = await tableFromPayload(payload, cfg)
+      const table = parseTable(source.text)
       if (!table.length) throw new RouteError('invalid', '文件里没有可读的表格行')
+      if (table.length < 2) throw new RouteError('invalid', `「${source.sheet || ''}」只有表头、没有作答行`)
       const filename = String((payload && payload.filename) || '')
       let scale = String((payload && payload.scale) || '')
       let wave = String((payload && payload.wave) || '')
