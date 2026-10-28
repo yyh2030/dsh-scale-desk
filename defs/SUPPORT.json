@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "kind": "multi",
+      "text": "",
+      "options": [
+        {
+          "value": "私下交谈",
+          "label": "私下交谈"
+        },
+        {
+          "value": "休息更久",
+          "label": "休息更久"
+        },
+        {
+          "value": "获取校内心理支持信息",
+          "label": "获取校内心理支持信息"
+        }
+      ]
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 1
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "可多选；答案以逗号分隔保存。",
+  "id": "SUPPORT",
+  "name": "结束时的支持需求选择",
+  "short": "支持需求",
+  "version": "自编（实验问卷题目整理）",
+  "waves": [
+    "end"
+  ],
+  "itemCount": 1,
+  "response": {
+    "min": 1,
+    "max": 3,
+    "labels": {}
+  }
+}

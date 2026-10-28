@@ -33,7 +33,7 @@
       "steps": [
         { "kind": "scale", "scale": "BACKGROUND", "wave": "T0" },
         { "kind": "scale", "scale": "TIME_PERCEPTION", "wave": "T0" },
-        { "kind": "survey", "title": "身体状态：饮酒、吸烟、戒烟时长、当前吸烟频率、咖啡因、运动、饮食、睡眠、药物", "note": "选择式与填空，非量表；药物名称需文字填写" },
+        { "kind": "scale", "scale": "BODY_STATE", "wave": "T0" },
         { "kind": "scale", "scale": "MOOD_CHECK", "wave": "T0" }
       ]
     },
@@ -82,7 +82,7 @@
         { "kind": "scale", "scale": "AI_USE_MONEY", "wave": "post" },
         { "kind": "scale", "scale": "AI_USE_HABIT", "wave": "post" },
         { "kind": "scale", "scale": "AI_USE_HELP", "wave": "post" },
-        { "kind": "survey", "title": "三道数学题（球拍与球、机器与零件、睡莲）与既往接触", "note": "数值填写 + 单选，非量表" },
+        { "kind": "scale", "scale": "CRT", "wave": "post" },
         { "kind": "scale", "scale": "IMPULSIVITY", "wave": "post" },
         { "kind": "scale", "scale": "NFC", "wave": "post" }
       ]
@@ -93,7 +93,7 @@
       "steps": [
         { "kind": "rest", "title": "4-7-8 呼吸与当下感官定向（着陆）练习" },
         { "kind": "scale", "scale": "DISCOMFORT", "wave": "end" },
-        { "kind": "survey", "title": "支持需求选择", "note": "私下交谈 / 休息更久 / 获取校内心理支持信息" },
+        { "kind": "scale", "scale": "SUPPORT", "wave": "end" },
         { "kind": "paper", "title": "研究结束说明、心理支持卡、debriefing" },
         { "kind": "paper", "title": "补偿发放" },
         { "kind": "paper", "title": "随访单独同意与联系方式登记" }
@@ -106,7 +106,7 @@
         { "kind": "scale", "scale": "PANAS_NA_WEEK", "wave": "week" },
         { "kind": "scale", "scale": "DASS_21", "wave": "week" },
         { "kind": "scale", "scale": "DISCOMFORT", "wave": "week" },
-        { "kind": "survey", "title": "不良体验与支持需求", "note": "单选与文字说明，非量表" }
+        { "kind": "scale", "scale": "ADVERSE", "wave": "week" }
       ]
     }
   ]

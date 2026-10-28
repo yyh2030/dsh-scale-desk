@@ -476,7 +476,14 @@ function instrumentPayload(model, def) {
     scoringType: def.scoring.type,
     missing: def.missing,
     reverse: def.items.filter(item => item.reverse).map(item => item.no),
-    items: def.items.map(item => ({ no: item.no, text: item.text })),
+    items: def.items.map(item => ({
+      no: item.no,
+      text: item.text,
+      kind: item.kind,
+      options: item.options,
+      min: item.min,
+      max: item.max
+    })),
     subscales: Object.values(def.scoring.subscales).map(sub => ({
       key: sub.key,
       label: sub.label,
@@ -725,7 +732,15 @@ export function apply(ctx, config = {}) {
       const raw = JSON.parse(await readFile(def.file, 'utf8'))
       const base = Array.isArray(raw.items) && raw.items.length === def.itemCount
         ? raw.items
-        : def.items.map(item => ({ no: item.no, text: item.text, reverse: item.reverse }))
+        : def.items.map(item => ({
+            no: item.no,
+            text: item.text,
+            reverse: item.reverse,
+            kind: item.kind,
+            options: item.options,
+            min: item.min,
+            max: item.max
+          }))
       raw.items = base
         .slice()
         .sort((a, b) => Number(a.no) - Number(b.no))

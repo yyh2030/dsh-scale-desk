@@ -690,7 +690,10 @@ window.__ModuleLoader__.load({
             const label = meta ? meta.label : key
             return sub.score === null ? label + ' 未计分' : label + ' ' + sub.score
           })
-          toast('已保存 ' + clean + '：' + bits.join('，'))
+          const filled = Object.values(saved.values || values).filter(value => String(value).trim() !== '').length
+          toast(bits.length
+            ? '已保存 ' + clean + '：' + bits.join('，')
+            : '已保存 ' + clean + '：' + filled + '/' + def.itemCount + ' 题')
         } catch (err) {
           setError(err.message)
         }
@@ -753,7 +756,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'sd-card' },
               h('div', { className: 'sd-card-head' }, h('h3', null, def.short + ' · ' + waveName(wave)),
                 h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
-                  h('span', { className: 'sd-note' }, '点数字作答，再点一次取消')
+                  h('span', { className: 'sd-note' }, '按题型作答；选错再点一次取消')
                 )
               ),
               def.instructions
@@ -765,52 +768,91 @@ window.__ModuleLoader__.load({
               h('div', { className: 'sd-matrix' },
                 Array.from({ length: def.itemCount }, (_, index) => {
                   const no = index + 1
+                  const entry = def.items.find(item => item.no === no) || { no, kind: 'likert', options: [] }
+                  const kind = entry.kind || 'likert'
+                  const current = values[no] === undefined ? '' : String(values[no])
                   const reverse = def.reverse.includes(no)
-                  const text = (def.items.find(entry => entry.no === no) || {}).text || ''
+                  const itemText = entry.text || ''
+                  const setValue = next => {
+                    setValues(prev => {
+                      const draft = { ...prev }
+                      if (next === '' || next === null || next === undefined) delete draft[no]
+                      else draft[no] = String(next)
+                      return draft
+                    })
+                  }
                   return h('div', { className: 'sd-item-row' + (reverse ? ' is-reverse' : ''), key: no },
                     h('span', { className: 'sd-item-no' }, String(no)),
                     h('span', {
-                      className: 'sd-item-text' + (text ? '' : ' is-empty'),
-                      title: text || '第 ' + no + ' 题（文本未录入）'
-                    }, text || '第 ' + no + ' 题'),
+                      className: 'sd-item-text' + (itemText ? '' : ' is-empty'),
+                      title: itemText || '第 ' + no + ' 题（文本未录入）'
+                    }, itemText || '第 ' + no + ' 题'),
                     h('div', { className: 'sd-opts' },
-                      Math.round(def.response.max - def.response.min + 1) > 12
+                      kind === 'text'
                         ? h('input', {
                             className: 'sd-input',
-                            type: 'number',
-                            min: def.response.min,
-                            max: def.response.max,
-                            style: { width: 96, height: 26, fontSize: 11.5, textAlign: 'right' },
-                            value: values[no] === undefined ? '' : String(values[no]),
-                            placeholder: def.response.min + '–' + def.response.max,
-                            onChange: event => {
-                              const raw = event.target.value
-                              setValues(prev => {
-                                const next = { ...prev }
-                                if (raw === '') delete next[no]
-                                else next[no] = raw
-                                return next
+                            style: { width: 280, height: 26, fontSize: 11.5 },
+                            value: current,
+                            maxLength: entry.maxLength || 2000,
+                            placeholder: entry.maxLength ? '文本，最多 ' + entry.maxLength + ' 字' : '文本',
+                            onChange: event => setValue(event.target.value)
+                          })
+                        : kind === 'choice' || kind === 'multi'
+                          ? (entry.options || []).map(option => {
+                              const selected = kind === 'multi'
+                                ? current.split(',').map(part => part.trim()).filter(Boolean).includes(option.value)
+                                : current === option.value
+                              return h('button', {
+                                key: option.value,
+                                type: 'button',
+                                className: 'sd-opt' + (selected ? ' is-on' : ''),
+                                title: option.value,
+                                onClick: () => {
+                                  if (kind === 'multi') {
+                                    const parts = current.split(',').map(part => part.trim()).filter(Boolean)
+                                    const next = selected
+                                      ? parts.filter(part => part !== option.value)
+                                      : [...parts, option.value]
+                                    setValue(next.join(','))
+                                  } else {
+                                    setValue(selected ? '' : option.value)
+                                  }
+                                }
+                              }, option.label)
+                            })
+                          : kind === 'number'
+                            ? h('input', {
+                                className: 'sd-input',
+                                type: 'number',
+                                min: entry.min === null || entry.min === undefined ? undefined : entry.min,
+                                max: entry.max === null || entry.max === undefined ? undefined : entry.max,
+                                style: { width: 120, height: 26, fontSize: 11.5, textAlign: 'right' },
+                                value: current,
+                                placeholder: [entry.min, entry.max].filter(value => value !== null && value !== undefined).join('–'),
+                                onChange: event => setValue(event.target.value)
                               })
-                            }
-                          })
-                        : Array.from({ length: Math.round(def.response.max - def.response.min + 1) }, (_, offset) => {
-                            const value = def.response.min + offset
-                            const on = String(values[no]) === String(value)
-                            return h('button', {
-                              key: value,
-                              type: 'button',
-                              className: 'sd-opt' + (on ? ' is-on' : ''),
-                              title: def.response.labels[value] || '',
-                              onClick: () => {
-                                setValues(prev => {
-                                  const next = { ...prev }
-                                  if (on) delete next[no]
-                                  else next[no] = String(value)
-                                  return next
+                            : Math.round(def.response.max - def.response.min + 1) > 12
+                              ? h('input', {
+                                  className: 'sd-input',
+                                  type: 'number',
+                                  min: def.response.min,
+                                  max: def.response.max,
+                                  style: { width: 96, height: 26, fontSize: 11.5, textAlign: 'right' },
+                                  value: current,
+                                  placeholder: def.response.min + '–' + def.response.max,
+                                  onChange: event => setValue(event.target.value)
                                 })
-                              }
-                            }, String(value))
-                          })
+                              : Array.from({ length: Math.round(def.response.max - def.response.min + 1) }, (_, offset) => {
+                                  const value = def.response.min + offset
+                                  const on = current === String(value)
+                                  return h('button', {
+                                    key: value,
+                                    type: 'button',
+                                    className: 'sd-opt' + (on ? ' is-on' : ''),
+                                    title: def.response.labels[value] || '',
+                                    onClick: () => setValue(on ? '' : String(value))
+                                  }, String(value))
+                                })
                     )
                   )
                 })

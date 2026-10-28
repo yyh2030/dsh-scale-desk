@@ -382,6 +382,131 @@ specs.push(
   })
 )
 
+/* ------------------------------------------------------------------ *
+ * 非量表题：选择题、数值题、文本题，答案按原文存
+ * ------------------------------------------------------------------ */
+
+const FREQ_YEAR = [
+  { value: '1', label: '从不' },
+  { value: '2', label: '偶尔（每月不到1次）' },
+  { value: '3', label: '有时（每月1-3次）' },
+  { value: '4', label: '经常（每周1-3次）' },
+  { value: '5', label: '频繁（每周4次及以上）' }
+]
+const CAFFEINE = [
+  { value: '1', label: '从不' },
+  { value: '2', label: '偶尔（每周1~2杯）' },
+  { value: '3', label: '有时（每周3~6杯）' },
+  { value: '4', label: '经常（每天1杯）' },
+  { value: '5', label: '频繁（每天2杯及以上）' }
+]
+const EXERCISE = [
+  { value: '1', label: '完全没有（0天）' },
+  { value: '2', label: '很少（1-2天）' },
+  { value: '3', label: '有时（3-5天）' },
+  { value: '4', label: '经常（6-9天）' },
+  { value: '5', label: '几乎每天（10天或以上）' }
+]
+const DIET = [
+  { value: '1', label: '非常不规律' },
+  { value: '2', label: '比较不规律' },
+  { value: '3', label: '不确定' },
+  { value: '4', label: '比较规律' },
+  { value: '5', label: '非常规律' }
+]
+const SLEEP = [
+  { value: '1', label: '非常差' },
+  { value: '2', label: '比较差' },
+  { value: '3', label: '一般' },
+  { value: '4', label: '比较好' },
+  { value: '5', label: '非常好' }
+]
+const QUIT_DURATION = [
+  { value: '1', label: '最近（不到1个月）' },
+  { value: '2', label: '1 ~ 3个月' },
+  { value: '3', label: '3~6个月' },
+  { value: '4', label: '半年-1年' },
+  { value: '5', label: '一年以上' }
+]
+const SMOKE_NOW = [
+  { value: '1', label: '偶尔（几周1包）' },
+  { value: '2', label: '有时（几天1包）' },
+  { value: '3', label: '比较频繁（每天半包左右）' },
+  { value: '4', label: '经常（每天约1包）' },
+  { value: '5', label: '非常频繁（每天1包以上）' }
+]
+
+specs.push(
+  unscored({
+    id: 'BODY_STATE',
+    name: 'Distracting · 身体状态',
+    short: '身体状态',
+    version: '自编（实验问卷题目整理）',
+    waves: ['T0'],
+    itemCount: 10,
+    response: { min: 1, max: 5, labels: {} },
+    items: [
+      { no: 1, kind: 'choice', text: '', options: FREQ_YEAR },
+      { no: 2, kind: 'choice', text: '', options: [{ value: 'A', label: '从未吸烟' }, { value: 'B', label: '已戒烟' }, { value: 'C', label: '正在吸烟' }] },
+      { no: 3, kind: 'choice', text: '', options: QUIT_DURATION },
+      { no: 4, kind: 'choice', text: '', options: SMOKE_NOW },
+      { no: 5, kind: 'choice', text: '', options: CAFFEINE },
+      { no: 6, kind: 'choice', text: '', options: EXERCISE },
+      { no: 7, kind: 'choice', text: '', options: DIET },
+      { no: 8, kind: 'choice', text: '', options: SLEEP },
+      { no: 9, kind: 'choice', text: '', options: [{ value: 'A', label: '否，目前未服用任何药物或补剂' }, { value: 'B', label: '是，目前正在服用' }] },
+      { no: 10, kind: 'text', text: '', maxLength: 300 }
+    ],
+    notes: '第 1–4 题问过去一年，第 5–8 题问最近两周；第 3、4 题按吸烟状态二选一填写；第 10 题填药物或补剂名称。答案按选项编号或原文保存。'
+  }),
+  unscored({
+    id: 'CRT',
+    name: '认知反思测试（三道数学题）',
+    short: '数学题',
+    version: '实验问卷题目整理',
+    waves: ['post'],
+    itemCount: 4,
+    response: { min: 0, max: 1000, labels: {} },
+    items: [
+      { no: 1, kind: 'number', text: '', min: 0, max: 10 },
+      { no: 2, kind: 'number', text: '', min: 0, max: 1000 },
+      { no: 3, kind: 'number', text: '', min: 0, max: 1000 },
+      { no: 4, kind: 'choice', text: '', options: [{ value: 'A', label: '完全没看过' }, { value: 'B', label: '见过1道' }, { value: 'C', label: '见过2道' }, { value: 'D', label: '见过3道题' }] }
+    ],
+    notes: '前三题填具体数字（允许小数，如 0.05）；第 4 题是既往接触。答案按原文保存。'
+  }),
+  unscored({
+    id: 'SUPPORT',
+    name: '结束时的支持需求选择',
+    short: '支持需求',
+    version: '自编（实验问卷题目整理）',
+    waves: ['end'],
+    itemCount: 1,
+    response: { min: 1, max: 3, labels: {} },
+    items: [
+      { no: 1, kind: 'multi', text: '', options: [{ value: '私下交谈', label: '私下交谈' }, { value: '休息更久', label: '休息更久' }, { value: '获取校内心理支持信息', label: '获取校内心理支持信息' }] }
+    ],
+    notes: '可多选；答案以逗号分隔保存。'
+  }),
+  unscored({
+    id: 'ADVERSE',
+    name: '不良体验与支持需求',
+    short: '不良体验',
+    version: '自编（实验问卷题目整理）',
+    waves: ['week'],
+    itemCount: 5,
+    response: { min: 1, max: 3, labels: {} },
+    items: [
+      { no: 1, kind: 'choice', text: '', options: [{ value: '否', label: '否' }, { value: '是', label: '是' }, { value: '不愿回答', label: '不愿回答' }] },
+      { no: 2, kind: 'text', text: '', maxLength: 1000 },
+      { no: 3, kind: 'choice', text: '', options: [{ value: '否', label: '否' }, { value: '是', label: '是' }] },
+      { no: 4, kind: 'choice', text: '', options: [{ value: '否', label: '否' }, { value: '是', label: '是' }] },
+      { no: 5, kind: 'text', text: '', maxLength: 200 }
+    ],
+    notes: '第 2 题在选「是」时填写说明；第 5 题在希望团队联系时填联系方式。答案按原文保存。'
+  })
+)
+
 await mkdir(OUT, { recursive: true })
 for (const spec of specs) {
   const file = path.join(OUT, `${spec.id}.json`)

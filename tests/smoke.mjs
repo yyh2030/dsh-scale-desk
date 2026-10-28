@@ -75,8 +75,8 @@ assert.equal(name, 'scale-desk')
 
 /* 1. first run seeds every definition plus the protocol into _lab/scales ---- */
 let status = await request(handler, 'GET', 'status')
-assert.equal(status.instruments.length, 21)
-assert.ok(status.seeded >= 21)
+assert.equal(status.instruments.length, 25)
+assert.ok(status.seeded >= 25)
 assert.ok(status.flow && status.flow.stages.length >= 8, '流程已播种')
 assert.deepEqual(status.flow.problems, [], '流程引用都能对上定义')
 assert.equal(status.scores.counts.subjects, 0)
@@ -191,6 +191,26 @@ const statusAfter = await request(handler, 'GET', 'status')
 assert.equal(statusAfter.instruments.find(item => item.id === 'FTPS').items[0].text, '测试题面1')
 
 await assert.rejects(request(handler, 'POST', 'saveTexts', { scale: 'FTPS', items: [{ no: 99, text: 'x' }] }))
+
+/* 11b. non-scale items: choice, number and text answers round-trip ---------- */
+const mixed = await request(handler, 'POST', 'save', {
+  id: '11002',
+  scale: 'BODY_STATE',
+  wave: 'T0',
+  values: { 1: '3', 2: 'B', 5: '1', 6: '2', 7: '4', 8: '5', 9: 'B', 10: '维生素D 1000IU' }
+})
+assert.equal(mixed.scored.answered, 8)
+assert.equal(mixed.scored.items.find(item => item.no === 10).value, '维生素D 1000IU')
+
+const bodyDetail = await request(handler, 'POST', 'detail', { id: '11002', scale: 'BODY_STATE', wave: 'T0' })
+const drug = bodyDetail.items.find(item => item.no === 10)
+assert.equal(drug.raw, '维生素D 1000IU')
+assert.equal(drug.scored, null)
+
+const bodyFile = await readFile(path.join(labDir, 'scales', 'answers', 'BODY_STATE__T0.csv'), 'utf8')
+assert.ok(bodyFile.includes('维生素D 1000IU'), '文本答案落盘')
+const bodyCsv = parseCsv(bodyFile)
+assert.equal(bodyCsv[0].length, 11, '编号 + 10 题')
 
 /* 12. waves: add a stage, see its column, then remove it again --------------- */
 const addedWave = await request(handler, 'POST', 'saveWaves', {

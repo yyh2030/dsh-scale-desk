@@ -131,6 +131,27 @@ export function waveSort(a, b) {
   return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || String(a).localeCompare(String(b))
 }
 
+const ITEM_KINDS = new Set(['likert', 'number', 'choice', 'multi', 'text'])
+
+function normalizeOptions(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map(option => {
+      if (option === null || option === undefined) return null
+      if (typeof option === 'object') {
+        const value = String(option.value === undefined ? option.label : option.value)
+        return value === '' ? null : { value, label: String(option.label === undefined ? value : option.label) }
+      }
+      const value = String(option)
+      return value === '' ? null : { value, label: value }
+    })
+    .filter(Boolean)
+}
+
+function itemField(item, key) {
+  return item && typeof item === 'object' ? item[key] : undefined
+}
+
 /* ------------------------------------------------------------------ *
  * definitions
  * ------------------------------------------------------------------ */
@@ -173,16 +194,32 @@ export function normalizeDef(raw, fallbackId) {
   for (const item of declaredItems) {
     const no = num(item && item.no, NaN)
     if (!Number.isInteger(no) || no < 1) continue
+    const declaredKind = String(itemField(item, 'kind') || 'likert')
     byNo.set(no, {
       no,
       text: String((item && item.text) || ''),
       reverse: Boolean(item && item.reverse),
-      subscale: String((item && item.subscale) || '')
+      subscale: String((item && item.subscale) || ''),
+      kind: ITEM_KINDS.has(declaredKind) ? declaredKind : 'likert',
+      options: normalizeOptions(itemField(item, 'options')),
+      min: Number.isFinite(Number(itemField(item, 'min'))) ? Number(itemField(item, 'min')) : null,
+      max: Number.isFinite(Number(itemField(item, 'max'))) ? Number(itemField(item, 'max')) : null,
+      maxLength: Number(itemField(item, 'maxLength')) > 0 ? Math.round(Number(itemField(item, 'maxLength'))) : 2000
     })
   }
   def.items = []
   for (let no = 1; no <= count; no += 1) {
-    def.items.push(byNo.get(no) || { no, text: '', reverse: false, subscale: '' })
+    def.items.push(byNo.get(no) || {
+      no,
+      text: '',
+      reverse: false,
+      subscale: '',
+      kind: 'likert',
+      options: [],
+      min: null,
+      max: null,
+      maxLength: 2000
+    })
   }
 
   const scoring = src.scoring && typeof src.scoring === 'object' ? src.scoring : {}
@@ -264,7 +301,6 @@ export function validateDefinition(def) {
   if (!def.name) list.push(issue('bad', 'definition', '定义缺少名称'))
   if (!def.version) list.push(issue('warn', 'definition', '没有写 version：不同版中文量表不可比，后续无法追溯', { hint: '在定义里补上中文版出处与年份' }))
   if (!def.itemCount) list.push(issue('bad', 'definition', '题量为 0：itemCount 与 items 都没写'))
-  if (def.response.max <= def.response.min) list.push(issue('bad', 'definition', '取值域上限不大于下限'))
   const labelKeys = Object.keys(def.response.labels)
   if (labelKeys.length && labelKeys.length !== Math.round(def.response.max - def.response.min + 1)) {
     list.push(issue('warn', 'definition', `取值域有 ${Math.round(def.response.max - def.response.min + 1)} 档，标签写了 ${labelKeys.length} 个`))
@@ -274,7 +310,21 @@ export function validateDefinition(def) {
   for (const item of def.items) {
     if (seen.has(item.no)) list.push(issue('bad', 'definition', `题号 ${item.no} 重复`))
     seen.add(item.no)
+    if (item.kind === 'choice' || item.kind === 'multi') {
+      if (!item.options.length) list.push(issue('bad', 'definition', `第 ${item.no} 题是选择题，但没有写可选项`))
+      const values = item.options.map(option => option.value)
+      if (new Set(values).size !== values.length) list.push(issue('bad', 'definition', `第 ${item.no} 题可选项有重复值`))
+    }
+    if (item.kind === 'number') {
+      if (item.min !== null && item.max !== null && item.min > item.max) {
+        list.push(issue('bad', 'definition', `第 ${item.no} 题数值范围下限大于上限`))
+      }
+    }
   }
+
+  // A pure-likert definition must keep the response range consistent.
+  const hasLikert = def.items.some(item => item.kind === 'likert')
+  if (hasLikert && def.response.max <= def.response.min) list.push(issue('bad', 'definition', '取值域上限不大于下限'))
 
   const subs = Object.values(def.scoring.subscales)
   if (!subs.length && def.scoring.type !== 'none') list.push(issue('bad', 'definition', '没有任何计分键'))
@@ -413,19 +463,40 @@ function labelLookup(def) {
 }
 
 /**
- * One raw answer to one number. Text labels are accepted so an export that
- * carries "非常同意" instead of 5 still scores; anything unparsable is kept as
- * `invalid` and treated as missing, never silently coerced.
+ * One raw answer to one value. Number-like items return a number; choice and
+ * text items keep the raw string. Anything unparsable is kept as `invalid` and
+ * treated as missing, never silently coerced.
  */
 const MISSING_TOKENS = new Set(['na', 'n/a', 'na.', 'null', 'nil', 'none', '-', '--', '—', '无', '空', '未答', '.'])
 
-export function parseValue(def, raw) {
+export function parseValue(def, raw, item) {
   const text = raw === null || raw === undefined ? '' : String(raw).trim()
   if (!text) return { value: null, reason: 'empty' }
   if (MISSING_TOKENS.has(text.toLowerCase())) return { value: null, reason: 'empty' }
+
+  const kind = item && item.kind ? item.kind : 'likert'
+  if (kind === 'text') {
+    const maxLength = (item && item.maxLength) || 2000
+    return { value: text.slice(0, maxLength) }
+  }
+  if (kind === 'choice' || kind === 'multi') {
+    const options = (item && item.options) || []
+    const allowed = new Set(options.map(option => option.value))
+    const parts = kind === 'multi'
+      ? text.split(/[;,，；]/).map(part => part.trim()).filter(Boolean)
+      : [text]
+    if (parts.length && parts.every(part => allowed.has(part))) {
+      return { value: kind === 'multi' ? parts.join(',') : parts[0] }
+    }
+    return { value: null, reason: 'unparsed', raw: text }
+  }
+
+  // number / likert: a bounded numeric answer
+  const min = kind === 'number' && item && Number.isFinite(item.min) ? item.min : def.response.min
+  const max = kind === 'number' && item && Number.isFinite(item.max) ? item.max : def.response.max
   const numeric = Number(text.replace(/[，,]/g, ''))
   if (Number.isFinite(numeric)) {
-    if (numeric < def.response.min || numeric > def.response.max) return { value: null, reason: 'range', raw: text }
+    if (numeric < min || numeric > max) return { value: null, reason: 'range', raw: text, min, max }
     return { value: numeric }
   }
   const byLabel = labelLookup(def).get(normalizeCode(text))
@@ -468,12 +539,13 @@ export function scoreAnswers(def, values = {}) {
   const scoredByNo = new Map()
   const items = def.items.map(item => {
     const raw = values[item.no]
-    const parsed = parseValue(def, raw)
-    const scored = scoredValue(def, parsed.value, item.reverse)
+    const parsed = parseValue(def, raw, item)
+    const scored = Number.isFinite(parsed.value) ? scoredValue(def, parsed.value, item.reverse) : null
     if (Number.isFinite(scored)) scoredByNo.set(item.no, scored)
     return {
       no: item.no,
       text: item.text,
+      kind: item.kind,
       reverse: item.reverse,
       raw: raw === undefined || raw === null ? '' : String(raw),
       value: parsed.value,
@@ -485,7 +557,7 @@ export function scoreAnswers(def, values = {}) {
   for (const sub of Object.values(def.scoring.subscales)) {
     subs[sub.key] = computeSubscale(def, sub, scoredByNo)
   }
-  const answered = items.filter(item => Number.isFinite(item.value)).length
+  const answered = items.filter(item => item.value !== null && item.value !== undefined && item.value !== '').length
   const invalid = items.filter(item => item.reason === 'range' || item.reason === 'unparsed')
   return {
     items,
@@ -876,7 +948,13 @@ export function validateData(defs, answerFiles, scores, provenance = []) {
       const bad = result.invalid
       if (bad.length) {
         rowsWithIssues += 1
-        list.push(issue('bad', 'data', `${def.short} ${file.wave} ${row.id}：${bad.map(item => `第 ${item.no} 题「${item.raw}」不在 ${def.response.min}–${def.response.max}`).join('；')}`, {
+        const describe = bad.map(item => {
+          const entry = def.items.find(candidate => candidate.no === item.no)
+          if (entry && (entry.kind === 'choice' || entry.kind === 'multi')) return `第 ${item.no} 题「${item.raw}」不在可选项里`
+          if (entry && entry.kind === 'number') return `第 ${item.no} 题「${item.raw}」不是 ${entry.min === null ? '' : entry.min}–${entry.max === null ? '' : entry.max} 的数字`
+          return `第 ${item.no} 题「${item.raw}」不在 ${def.response.min}–${def.response.max}`
+        })
+        list.push(issue('bad', 'data', `${def.short} ${file.wave} ${row.id}：${describe.join('；')}`, {
           scale: def.id, wave: file.wave, id: row.id, hint: '修正原始作答后重算；当前按缺失处理'
         }))
       }

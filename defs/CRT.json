@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "unit": "分",
+  "decimals": 2,
+  "items": [
+    {
+      "no": 1,
+      "kind": "number",
+      "text": "",
+      "min": 0,
+      "max": 10
+    },
+    {
+      "no": 2,
+      "kind": "number",
+      "text": "",
+      "min": 0,
+      "max": 1000
+    },
+    {
+      "no": 3,
+      "kind": "number",
+      "text": "",
+      "min": 0,
+      "max": 1000
+    },
+    {
+      "no": 4,
+      "kind": "choice",
+      "text": "",
+      "options": [
+        {
+          "value": "A",
+          "label": "完全没看过"
+        },
+        {
+          "value": "B",
+          "label": "见过1道"
+        },
+        {
+          "value": "C",
+          "label": "见过2道"
+        },
+        {
+          "value": "D",
+          "label": "见过3道题"
+        }
+      ]
+    }
+  ],
+  "scoring": {
+    "type": "none"
+  },
+  "missing": {
+    "rule": "prorate",
+    "minAnswered": 4
+  },
+  "codes": {},
+  "source": "实验问卷题目整理.docx",
+  "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
+  "notes": "前三题填具体数字（允许小数，如 0.05）；第 4 题是既往接触。答案按原文保存。",
+  "id": "CRT",
+  "name": "认知反思测试（三道数学题）",
+  "short": "数学题",
+  "version": "实验问卷题目整理",
+  "waves": [
+    "post"
+  ],
+  "itemCount": 4,
+  "response": {
+    "min": 0,
+    "max": 1000,
+    "labels": {}
+  }
+}

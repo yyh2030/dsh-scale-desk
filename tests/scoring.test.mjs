@@ -54,10 +54,10 @@ function answers(count, value) {
 }
 
 test('every shipped definition is internally consistent', () => {
-  assert.equal(defs.length, 21)
+  assert.equal(defs.length, 25)
   const scored = defs.filter(def => def.scoring.type !== 'none')
   assert.equal(scored.length, 6, '六个计分量表')
-  assert.equal(defs.filter(def => def.scoring.type === 'none').length, 15, '十五个只收集不计分的问卷')
+  assert.equal(defs.filter(def => def.scoring.type === 'none').length, 19, '十九份只收集不计分的问卷')
   for (const def of defs) {
     const issues = validateDefinition(def).filter(item => item.level === 'bad')
     assert.deepEqual(issues, [], `${def.id} 定义有问题：${issues.map(item => item.text).join('；')}`)
@@ -335,4 +335,55 @@ test('item text paste refuses mixed numbering instead of guessing', () => {
   const mixed = parseItemTextTable('1\t甲\n乙\n3\t丙', 9)
   assert.deepEqual(mixed.items, [])
   assert.ok(mixed.issues.some(item => item.level === 'bad' && /混在一起/.test(item.text)))
+})
+
+test('choice and text items keep raw answers without scoring', () => {
+  const def = byId('BODY_STATE')
+  const result = scoreAnswers(def, {
+    1: '3',
+    2: 'B',
+    5: '1',
+    6: '2',
+    7: '4',
+    8: '5',
+    9: 'B',
+    10: '维生素D 1000IU'
+  })
+  assert.equal(result.answered, 8)
+  assert.equal(result.missing, 2)
+  const text = result.items.find(item => item.no === 10)
+  assert.equal(text.value, '维生素D 1000IU')
+  assert.equal(text.scored, null)
+  const choice = result.items.find(item => item.no === 2)
+  assert.equal(choice.value, 'B')
+  assert.equal(choice.scored, null)
+  assert.deepEqual(result.invalid, [])
+})
+
+test('a choice value outside its options is flagged, not stored', () => {
+  const def = byId('BODY_STATE')
+  const result = scoreAnswers(def, { 2: 'Z' })
+  const item = result.items.find(entry => entry.no === 2)
+  assert.equal(item.value, null)
+  assert.equal(item.reason, 'unparsed')
+  assert.equal(result.answered, 0)
+})
+
+test('number items use their own bounds, including decimals', () => {
+  const def = byId('CRT')
+  const ok = scoreAnswers(def, { 1: '0.05', 2: '5', 3: '24', 4: 'A' })
+  assert.equal(ok.answered, 4)
+  assert.equal(ok.items.find(item => item.no === 1).value, 0.05)
+  assert.deepEqual(ok.invalid, [])
+
+  const out = scoreAnswers(def, { 1: '99' })
+  assert.equal(out.invalid[0].reason, 'range')
+  assert.equal(out.answered, 0)
+})
+
+test('multi choice joins the selected values', () => {
+  const def = byId('SUPPORT')
+  const result = scoreAnswers(def, { 1: '私下交谈, 获取校内心理支持信息' })
+  assert.equal(result.items[0].value, '私下交谈,获取校内心理支持信息')
+  assert.equal(result.answered, 1)
 })
