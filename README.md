@@ -104,6 +104,16 @@ FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DA
 - 定义里**不存题目文本**，只存题号、反向标记、计分键与导出码；要显示题面，就在 `_lab/scales/defs/<量表>.json` 的 `items[].text` 里补，只留在本地数据目录，不进这个仓库。这样中文版授权状况不明时也能先计分。
 - 同一个量表的中文版可能有多版，`version` 必须写清。改版后旧批次会被校验标成「版本漂移」，而不是静默混算。
 
+## 题目文本
+
+定义里 `items[].text` 默认是空的（题目不随插件仓库分发）。要补：
+
+1. 编辑 `_lab/scales/defs/<量表>.json`，把 `items[].text` 填上原文，保存后回面板点「刷新」即生效，不用重启；
+2. 本机这六份定义已经照 `02_实验材料与问卷/实验问卷题目整理.docx` 的题表填好（FTPS 10 题、PANAS-NA 各 9 题、STAI-S 20 题、CT-DAS 15 题、DASS-21 21 题），换了中文版就整份替换；
+3. 只认题号：`items` 里 `no` 与文本一一对应，反向标记在 `reverse`，改文本不会动计分。
+
+填好后「量表库」与「录入 → 答题纸」都显示题面；`text` 为空的题显示「第 n 题（文本未录入）」。
+
 ## 安装
 
 源码在 `D:\dsh-plugins\scale-desk`，按 bundle 装进 desktop profile（`plugin_manager` 的 `install_bundle`，target 为绝对目录）。配置写在插件自己的 `cordis.patch.yml`：

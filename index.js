@@ -407,6 +407,7 @@ function instrumentPayload(model, def) {
     scoringType: def.scoring.type,
     missing: def.missing,
     reverse: def.items.filter(item => item.reverse).map(item => item.no),
+    items: def.items.map(item => ({ no: item.no, text: item.text })),
     subscales: Object.values(def.scoring.subscales).map(sub => ({
       key: sub.key,
       label: sub.label,

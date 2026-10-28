@@ -469,9 +469,13 @@ window.__ModuleLoader__.load({
                 Array.from({ length: def.itemCount }, (_, index) => {
                   const no = index + 1
                   const reverse = def.reverse.includes(no)
+                  const text = (def.items.find(entry => entry.no === no) || {}).text || ''
                   return h('div', { className: 'sd-item-row' + (reverse ? ' is-reverse' : ''), key: no },
                     h('span', { className: 'sd-item-no' }, String(no)),
-                    h('span', { className: 'sd-item-text is-empty' }, '第 ' + no + ' 题'),
+                    h('span', {
+                      className: 'sd-item-text' + (text ? '' : ' is-empty'),
+                      title: text || '第 ' + no + ' 题（文本未录入）'
+                    }, text || '第 ' + no + ' 题'),
                     h('div', { className: 'sd-opts' },
                       Array.from({ length: Math.round(def.response.max - def.response.min + 1) }, (_, offset) => {
                         const value = def.response.min + offset
