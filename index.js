@@ -31,6 +31,7 @@ import {
   scoreAnswers,
   scoreColumns,
   scoresCsv,
+  scanTargets,
   scoresSummaryText,
   subjectScoreText,
   validateData,
@@ -458,6 +459,22 @@ async function writeAnswerFile(cfg, scale, wave, rows, itemCount = 0) {
 function cellText(value) {
   const text = value === null || value === undefined ? '' : String(value)
   return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text
+}
+
+/**
+ * Merge imported rows into the existing answer file. Same id + same answers is
+ * a re-import and replaces in place; same id + different answers is kept as a
+ * second row and flagged so the reviewer decides which submission is real.
+ */
+function mergeAnswerRows(existing, incoming, mode) {
+  const canonical = values => JSON.stringify(Object.keys(values || {}).sort().map(no => [no, values[no]]))
+  const rows = mode === 'replace' ? [] : existing.map(row => ({ id: row.id, values: row.values }))
+  for (const row of incoming) {
+    const same = rows.findIndex(existingRow => existingRow.id === row.id && canonical(existingRow.values) === canonical(row.values))
+    if (same >= 0) rows[same] = { id: row.id, values: row.values }
+    else rows.push({ id: row.id, values: row.values })
+  }
+  return rows
 }
 
 async function loadProvenance(cfg) {
@@ -1242,11 +1259,15 @@ export function apply(ctx, config = {}) {
       let scale = String((payload && payload.scale) || '')
       let wave = String((payload && payload.wave) || '')
       let guessed = null
+      const targets = scanTargets(current.defs, header, body)
       if (!scale || !wave) {
         const pool = scale ? current.defs.filter(def => def.id === scale) : current.defs
         guessed = guessTarget(pool, header, filename)
         if (!guessed) {
-          throw new RouteError('invalid', `从列名里认不出是哪个量表（${header.slice(0, 6).join(' / ')}）。请先选量表与波次，再预览。`)
+          if (!targets.length) {
+            throw new RouteError('invalid', `这份文件的列名对不上任何一份量表（前几列：${header.slice(0, 4).join(' / ')}）。可以手动选择目标量表与波次再预览。`)
+          }
+          guessed = targets[0]
         }
         if (!scale) scale = guessed.scale
         if (!wave) wave = guessed.wave
@@ -1272,6 +1293,14 @@ export function apply(ctx, config = {}) {
         scale: def.id,
         scaleName: def.name,
         wave,
+        targets: targets.map(target => ({
+          scale: target.scale,
+          short: target.short,
+          name: target.name,
+          wave: target.wave,
+          matched: target.matched,
+          total: target.total
+        })),
         header,
         mapping: {
           idColumn: mapping.idColumn,
@@ -1326,16 +1355,7 @@ export function apply(ctx, config = {}) {
       const mode = payload && payload.mode === 'replace' ? 'replace' : 'merge'
       const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
       const existing = file ? file.rows : []
-      // Same id with identical answers is a re-import and replaces in place;
-      // same id with different answers is kept as a second row and flagged, so
-      // the reviewer decides which submission is the real one.
-      const canonical = values => JSON.stringify(Object.keys(values || {}).sort().map(no => [no, values[no]]))
-      const rows = mode === 'replace' ? [] : existing.map(row => ({ id: row.id, values: row.values }))
-      for (const row of applied.rows) {
-        const same = rows.findIndex(existingRow => existingRow.id === row.id && canonical(existingRow.values) === canonical(row.values))
-        if (same >= 0) rows[same] = { id: row.id, values: row.values }
-        else rows.push({ id: row.id, values: row.values })
-      }
+      const rows = mergeAnswerRows(existing, applied.rows, mode)
       await writeAnswerFile(cfg, def.id, wave, rows, def.itemCount)
       await appendProvenance(cfg, {
         action: 'import',
@@ -1357,6 +1377,56 @@ export function apply(ctx, config = {}) {
         issues: applied.issues.slice(0, 30),
         file: file ? file.file : path.join(cfg.answersDir, answerFileName(def.id, wave)).replace(/\\/g, '/')
       }
+    },
+
+    /**
+     * Import one file into every definition its header matches. One QuestionPro
+     * export usually carries several matrices (T0 has four), so this is the
+     * normal path; the per-target import above stays for fixing a single block.
+     */
+    async importFile(payload) {
+      const current = await model(false)
+      const source = await tableFromPayload(payload, cfg)
+      const table = parseTable(source.text)
+      if (table.length < 2) throw new RouteError('invalid', `「${source.sheet || ''}」只有表头、没有作答行`)
+      const header = table[0].map(value => String(value ?? '').trim())
+      const body = table.slice(1)
+      const filename = String((payload && payload.filename) || '')
+      const targets = scanTargets(current.defs, header, body)
+      if (!targets.length) {
+        throw new RouteError('invalid', `这份文件的列名对不上任何一份量表（前几列：${header.slice(0, 4).join(' / ')}）。可以在预览里手动指定。`)
+      }
+      const mode = payload && payload.mode === 'replace' ? 'replace' : 'merge'
+      const results = []
+      for (const target of targets) {
+        const def = findDef(current, target.scale)
+        const applied = applyImport(def, target.wave, table, target.mapping)
+        if (!applied.rows.length) continue
+        const file = current.answerFiles.find(item => item.scale === def.id && item.wave === target.wave)
+        const rows = mergeAnswerRows(file ? file.rows : [], applied.rows, mode)
+        await writeAnswerFile(cfg, def.id, target.wave, rows, def.itemCount)
+        await appendProvenance(cfg, {
+          action: 'import',
+          scale: def.id,
+          wave: target.wave,
+          defVersion: def.version,
+          file: filename || null,
+          rows: applied.rows.length,
+          mode
+        })
+        results.push({
+          scale: def.id,
+          short: def.short,
+          wave: target.wave,
+          imported: applied.rows.length,
+          total: rows.length,
+          matched: target.matched,
+          totalItems: target.total
+        })
+      }
+      if (!results.length) throw new RouteError('invalid', '没有解析出任何一行带编号的作答')
+      await syncScores()
+      return { filename, sheet: source.sheet, results }
     },
 
     async score() {

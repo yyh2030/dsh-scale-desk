@@ -1,8 +1,19 @@
 {
   "version": "2026-10-28",
-  "source": "02_实验材料与问卷/实验问卷题目整理.docx",
-  "note": "施测顺序以这份文档为准。MS 写作与 EFT/ERT 音频的指导语不在插件内，按实验材料执行。",
+  "source": "实验问卷题目整理.docx + QuestionPro 2026-10 导出",
+  "note": "施测顺序按文档；题目与题量以 QuestionPro 2026-10 导出为准。MS 写作与 EFT/ERT 音频的指导语不在插件内，按实验材料执行。",
   "stages": [
+    {
+      "id": "screen",
+      "label": "Phase 0 · 筛查问卷（线上，Sona）",
+      "steps": [
+        { "kind": "scale", "scale": "BACKGROUND", "wave": "ts" },
+        { "kind": "scale", "scale": "TIME_PERCEPTION", "wave": "ts" },
+        { "kind": "scale", "scale": "BODY_STATE", "wave": "ts" },
+        { "kind": "scale", "scale": "MOOD_CHECK", "wave": "ts" },
+        { "kind": "scale", "scale": "CT_DAS", "wave": "ts" }
+      ]
+    },
     {
       "id": "T0",
       "label": "Phase 1 · T0 基线",
@@ -41,7 +52,6 @@
       "id": "T1",
       "label": "Phase 3 · T1（写作后）",
       "steps": [
-        { "kind": "scale", "scale": "CT_DAS", "wave": "T1" },
         { "kind": "task", "title": "中文调整金额延迟折扣任务（DDT）", "note": "PsychoPy，T1" },
         { "kind": "scale", "scale": "FTPS", "wave": "T1" }
       ]

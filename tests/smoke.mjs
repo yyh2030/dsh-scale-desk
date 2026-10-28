@@ -75,8 +75,8 @@ assert.equal(name, 'scale-desk')
 
 /* 1. first run seeds every definition plus the protocol into _lab/scales ---- */
 let status = await request(handler, 'GET', 'status')
-assert.equal(status.instruments.length, 25)
-assert.ok(status.seeded >= 25)
+assert.equal(status.instruments.length, 26)
+assert.ok(status.seeded >= 26)
 assert.ok(status.flow && status.flow.stages.length >= 8, '流程已播种')
 assert.deepEqual(status.flow.problems, [], '流程引用都能对上定义')
 assert.equal(status.scores.counts.subjects, 0)

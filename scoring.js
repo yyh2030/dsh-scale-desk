@@ -881,6 +881,29 @@ export function mapImportColumns(def, wave, header, rows) {
   }
 }
 
+/** Every (definition, wave) whose codes cover this header well enough. */
+export function scanTargets(defs, header, rows) {
+  const targets = []
+  for (const def of defs) {
+    for (const wave of def.waves) {
+      const mapping = mapImportColumns(def, wave, header, rows)
+      if (!mapping.idColumn) continue
+      const threshold = Math.max(1, Math.ceil(def.itemCount * 0.6))
+      if (mapping.matched < threshold) continue
+      targets.push({
+        scale: def.id,
+        short: def.short,
+        name: def.name,
+        wave,
+        matched: mapping.matched,
+        total: mapping.total,
+        mapping
+      })
+    }
+  }
+  return targets.sort((a, b) => b.matched / b.total - a.matched / a.total)
+}
+
 /** Best (scale, wave) guess for a file, from its header codes first, name second. */
 export function guessTarget(defs, header, filename = '') {
   const names = (header || []).map(name => normalizeCode(headerCode(name)))

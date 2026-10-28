@@ -69,7 +69,7 @@ const specs = [
       }
     },
     missing: { rule: 'prorate', minAnswered: 8 },
-    codes: { T0: codes('t0_ftps_', 10), T1: codes('t1_ftps_', 10), T2: codes('t2_ftps_', 10) },
+    codes: { T0: Array.from({ length: 10 }, () => 't0_ftps'), T1: Array.from({ length: 10 }, () => 't1_ftps'), T2: Array.from({ length: 10 }, () => 't2_ftps') },
     unit: '分',
     decimals: 2,
     source: '量表计分与来源.docx M04；原版出处待核',
@@ -93,7 +93,7 @@ const specs = [
       }
     },
     missing: { rule: 'prorate', minAnswered: 7 },
-    codes: { T0: codes('t0_na_', 9), T2: codes('t2_na_', 9) },
+    codes: { T0: Array.from({ length: 9 }, () => 't0_na'), T2: Array.from({ length: 9 }, () => 't2_na') },
     unit: '分',
     decimals: 2,
     source: '量表计分与来源.docx M05；邱林、郑雪、王雁飞（2008），N=290，α: PA .87/.87、NA .84/.86',
@@ -117,7 +117,7 @@ const specs = [
       }
     },
     missing: { rule: 'prorate', minAnswered: 7 },
-    codes: { week: codes('week_na_', 9) },
+    codes: { week: Array.from({ length: 9 }, () => 'week_na') },
     unit: '分',
     decimals: 2,
     source: '量表计分与来源.docx M19；邱林等（2008）',
@@ -141,7 +141,7 @@ const specs = [
       }
     },
     missing: { rule: 'prorate', minAnswered: 18 },
-    codes: { T0: codes('t0_stais_', 20), T2: codes('t2_stais_', 20) },
+    codes: { T0: Array.from({ length: 20 }, () => 't0_stais'), T2: Array.from({ length: 20 }, () => 't2_stais') },
     unit: '分',
     decimals: 2,
     source: '量表计分与来源.docx M06；Spielberger（1983）',
@@ -154,7 +154,7 @@ const specs = [
     name: '中文版 Templer 死亡焦虑量表',
     short: 'CT-DAS',
     version: 'Templer（1970）；Yang et al.（2012）中文版，15 题',
-    waves: ['T0', 'T1'],
+    waves: ['T0', 'ts'],
     itemCount: 15,
     response: { min: 1, max: 5, labels: LIKERT_5_DAS },
     items: items(15, [2, 3, 5, 6, 7, 15]),
@@ -165,12 +165,12 @@ const specs = [
       }
     },
     missing: { rule: 'prorate', minAnswered: 12 },
-    codes: { T0: codes('t0_ctdas_', 15) },
+    codes: { T0: Array.from({ length: 15 }, () => 't0_ctdas'), ts: Array.from({ length: 15 }, () => 'ts_ctdas') },
     unit: '分',
     decimals: 2,
     source: '量表计分与来源.docx M13；Templer（1970）；Yang et al.（2012）中文版 α=.71、重测 .831',
     license: NO_TEXT_NOTE,
-    notes: '反向题：第 2、3、5、6、7、15 题。15 项相加，范围 15–75，分数越高死亡焦虑越高。'
+    notes: '反向题：第 2、3、5、6、7、15 题。15 项相加，范围 15–75。筛查问卷（ts_ctdas）与 T0（t0_ctdas）各测一次；旧文档里的 T1 版在导出的 T1 问卷中不存在，已去掉。'
   },
   {
     schema: 1,
@@ -192,7 +192,7 @@ const specs = [
       }
     },
     missing: { rule: 'prorate', minAnswered: 6 },
-    codes: { week: codes('week_dass_', 21) },
+    codes: { week: Array.from({ length: 21 }, () => 'week_dass') },
     unit: '分',
     decimals: 2,
     source: '量表计分与来源.docx M20；Lovibond & Lovibond（1995）；龚栩等（2010）N=1779，α=.77/.79/.76，总量表 .89',
@@ -232,30 +232,33 @@ function unscored(spec) {
 specs.push(
   unscored({
     id: 'BACKGROUND',
+    codes: { ts: Array.from({ length: 5 }, () => 'Q2') },
     name: 'Distracting · 总体状态',
     short: '总体状态',
     version: '自编（实验问卷题目整理）',
-    waves: ['T0'],
+    waves: ['T0', 'ts'],
     itemCount: 5,
     response: { min: 1, max: 5, labels: AGREE_STRONG },
     notes: '家庭经济、储蓄、时间规划、决策时的时间/金钱优先。不计分。'
   }),
   unscored({
     id: 'TIME_PERCEPTION',
+    codes: { ts: Array.from({ length: 6 }, () => 'Q3') },
     name: 'Distracting · 时间感受',
     short: '时间感受',
     version: '自编（实验问卷题目整理）',
-    waves: ['T0'],
+    waves: ['T0', 'ts'],
     itemCount: 6,
     response: { min: 1, max: 5, labels: LIKE_ME },
     notes: '时间紧张与碎片化的主观感受。不计分。'
   }),
   unscored({
     id: 'MOOD_CHECK',
+    codes: { ts: Array.from({ length: 4 }, () => 'Q14') },
     name: 'Distracting · 情绪状态补充',
     short: '情绪补充',
     version: '自编（实验问卷题目整理）',
-    waves: ['T0'],
+    waves: ['T0', 'ts'],
     itemCount: 4,
     response: { min: 0, max: 3, labels: FREQ_4 },
     notes: '过去两周：情绪低落、兴趣减退、紧张、无法停止担心。不计分。'
@@ -339,6 +342,7 @@ specs.push(
   }),
   unscored({
     id: 'AI_USE_MONEY',
+    codes: { post: Array.from({ length: 4 }, () => 'post_ai_money') },
     name: '金钱选择中的 AI 态度',
     short: 'AI·金钱',
     version: '自编（实验问卷题目整理）',
@@ -349,6 +353,7 @@ specs.push(
   }),
   unscored({
     id: 'AI_USE_HABIT',
+    codes: { post: Array.from({ length: 11 }, () => 'post_ai_use') },
     name: 'AI 工具使用习惯与看法',
     short: 'AI·习惯',
     version: '自编（实验问卷题目整理）',
@@ -359,6 +364,7 @@ specs.push(
   }),
   unscored({
     id: 'AI_USE_HELP',
+    codes: { post: Array.from({ length: 4 }, () => 'post_ai_help') },
     name: '遇事询问 AI 的习惯',
     short: 'AI·求助',
     version: '自编（实验问卷题目整理）',
@@ -369,6 +375,7 @@ specs.push(
   }),
   unscored({
     id: 'IMPULSIVITY',
+    codes: { post: Array.from({ length: 8 }, () => 'post_impulsivity') },
     name: '冲动性量表（极简）',
     short: '冲动性',
     version: '极简版（实验问卷题目整理）',
@@ -379,6 +386,7 @@ specs.push(
   }),
   unscored({
     id: 'NFC',
+    codes: { post: Array.from({ length: 18 }, () => 'post_thinking') },
     name: '认知需求量表',
     short: '认知需求',
     version: '实验问卷题目整理',
@@ -456,10 +464,11 @@ const SMOKE_NOW = [
 specs.push(
   unscored({
     id: 'BODY_STATE',
+    codes: { ts: ['Q4', 'Q5', 'Q6', 'Q7', 'Q8', 'Q9', 'Q10', 'Q11', 'Q12', 'Q13'] },
     name: 'Distracting · 身体状态',
     short: '身体状态',
     version: '自编（实验问卷题目整理）',
-    waves: ['T0'],
+    waves: ['T0', 'ts'],
     itemCount: 10,
     response: { min: 1, max: 5, labels: {} },
     items: [
@@ -478,6 +487,7 @@ specs.push(
   }),
   unscored({
     id: 'CRT',
+    codes: { post: ['post_math_1', 'post_math_2', 'post_math_3', 'post_math_exposure'] },
     name: '认知反思测试（三道数学题）',
     short: '数学题',
     version: '实验问卷题目整理',

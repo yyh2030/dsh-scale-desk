@@ -31,7 +31,14 @@
     "rule": "prorate",
     "minAnswered": 4
   },
-  "codes": {},
+  "codes": {
+    "post": [
+      "post_ai_help",
+      "post_ai_help",
+      "post_ai_help",
+      "post_ai_help"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "面对困难/选择时的求助倾向。不计分。",

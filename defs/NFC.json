@@ -101,7 +101,28 @@
     "rule": "prorate",
     "minAnswered": 18
   },
-  "codes": {},
+  "codes": {
+    "post": [
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking",
+      "post_thinking"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "原文档未给反向计分规则，故不计分；若后续要算总分，先确认反向题号。",

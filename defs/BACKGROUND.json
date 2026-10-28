@@ -36,7 +36,15 @@
     "rule": "prorate",
     "minAnswered": 5
   },
-  "codes": {},
+  "codes": {
+    "ts": [
+      "Q2",
+      "Q2",
+      "Q2",
+      "Q2",
+      "Q2"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "家庭经济、储蓄、时间规划、决策时的时间/金钱优先。不计分。",
@@ -45,7 +53,8 @@
   "short": "总体状态",
   "version": "自编（实验问卷题目整理）",
   "waves": [
-    "T0"
+    "T0",
+    "ts"
   ],
   "itemCount": 5,
   "response": {

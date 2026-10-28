@@ -55,7 +55,14 @@
     "rule": "prorate",
     "minAnswered": 4
   },
-  "codes": {},
+  "codes": {
+    "post": [
+      "post_math_1",
+      "post_math_2",
+      "post_math_3",
+      "post_math_exposure"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "前三题填具体数字（允许小数，如 0.05）；第 4 题是既往接触。答案按原文保存。",

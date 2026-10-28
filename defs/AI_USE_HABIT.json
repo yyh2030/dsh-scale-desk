@@ -66,7 +66,21 @@
     "rule": "prorate",
     "minAnswered": 11
   },
-  "codes": {},
+  "codes": {
+    "post": [
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use",
+      "post_ai_use"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "日常使用习惯与总体评价。不计分。",

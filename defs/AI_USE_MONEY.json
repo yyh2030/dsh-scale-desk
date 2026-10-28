@@ -31,7 +31,14 @@
     "rule": "prorate",
     "minAnswered": 4
   },
-  "codes": {},
+  "codes": {
+    "post": [
+      "post_ai_money",
+      "post_ai_money",
+      "post_ai_money",
+      "post_ai_money"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "必须放在决策任务之后。不计分。",

@@ -1098,6 +1098,7 @@ window.__ModuleLoader__.load({
       const [text, setText] = useState('')
       const [previews, setPreviews] = useState([])
       const [focus, setFocus] = useState(0)
+      const [manual, setManual] = useState({})
       const [mode, setMode] = useState('merge')
       const [busy, setBusy] = useState('')
       const [error, setError] = useState('')
@@ -1143,7 +1144,7 @@ window.__ModuleLoader__.load({
               ? { data: source.base64, filename: source.name }
               : { text: source.text, filename: source.name }
             const next = await call('importPreview', payload)
-            results.push({ ...source, status: 'ok', data: next, imported: false })
+            results.push({ ...source, status: 'ok', data: next, imported: false, auto: true })
           } catch (err) {
             results.push({ ...source, status: 'error', error: err.message })
           }
@@ -1154,8 +1155,41 @@ window.__ModuleLoader__.load({
         setBusy('')
       }
 
+      const previewWithTarget = async index => {
+        const entry = previews[index]
+        if (!entry) return
+        const choice = manual[index] || {}
+        if (!choice.scale || !choice.wave) {
+          setError('先给这份文件选一个量表与波次')
+          return
+        }
+        setBusy('preview-' + index)
+        setError('')
+        try {
+          const payload = entry.base64
+            ? { data: entry.base64, filename: entry.name, scale: choice.scale, wave: choice.wave }
+            : { text: entry.text, filename: entry.name, scale: choice.scale, wave: choice.wave }
+          const next = await call('importPreview', payload)
+          setPreviews(prev => prev.map((item, at) => at === index ? { ...item, status: 'ok', data: next, auto: false, error: '' } : item))
+          setFocus(index)
+        } catch (err) {
+          setError(entry.name + '：' + err.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
       const applyEntry = async entry => {
-        const payload = {
+        if (entry.auto) {
+          const result = await call('importFile', {
+            data: entry.base64 || undefined,
+            text: entry.text || undefined,
+            filename: entry.name,
+            mode
+          })
+          return { multi: true, result }
+        }
+        const result = await call('importApply', {
           data: entry.base64 || undefined,
           text: entry.text || undefined,
           filename: entry.name,
@@ -1163,8 +1197,8 @@ window.__ModuleLoader__.load({
           wave: entry.data.wave,
           mode,
           mapping: entry.data.mapping
-        }
-        return call('importApply', payload)
+        })
+        return { multi: false, result }
       }
 
       const importAt = async index => {
@@ -1173,8 +1207,14 @@ window.__ModuleLoader__.load({
         setBusy('apply-' + index)
         setError('')
         try {
-          const result = await applyEntry(entry)
-          toast('已导入 ' + entry.name + '：' + result.imported + ' 行到 ' + result.scale + ' ' + waveName(result.wave) + '（现共 ' + result.total + ' 人）')
+          const outcome = await applyEntry(entry)
+          if (outcome.multi) {
+            const bits = outcome.result.results.map(item => item.short + ' ' + waveName(item.wave) + ' ' + item.imported + ' 行')
+            toast('已导入 ' + entry.name + '：' + bits.join('，'))
+          } else {
+            const result = outcome.result
+            toast('已导入 ' + entry.name + '：' + result.imported + ' 行到 ' + result.scale + ' ' + waveName(result.wave) + '（现共 ' + result.total + ' 人）')
+          }
           setPreviews(prev => prev.map((item, at) => at === index ? { ...item, imported: true } : item))
           if (onImported) onImported()
         } catch (err) {
@@ -1232,7 +1272,7 @@ window.__ModuleLoader__.load({
             onClick: () => fileRef.current && fileRef.current.click()
           },
             h('strong', null, '把导出文件拖到这里，或点一下选文件（可多选）'),
-            h('span', null, 'QuestionPro 选「Data Export / Raw Data」那一份；只有表头的空报告会被标出来')
+            h('span', null, 'QuestionPro 选「Data Export / Raw Data」那一份；一份文件里常有多组量表，会按题码自动全部导入')
           ),
           h('input', {
             ref: fileRef,
@@ -1305,23 +1345,56 @@ window.__ModuleLoader__.load({
                     },
                       h('td', { className: 'sd-mono' }, entry.name),
                       h('td', { className: 'sd-note' }, ok ? entry.data.sheet || '—' : ''),
-                      h('td', null, ok ? entry.data.scale + ' · ' + waveName(entry.data.wave) : '—'),
+                      h('td', null, ok
+                        ? (entry.auto
+                            ? h('span', { className: 'sd-note', title: (entry.data.targets || []).map(t => t.short + ' ' + t.wave).join('，') },
+                                (entry.data.targets || []).length + ' 组：' + (entry.data.targets || []).slice(0, 2).map(t => t.short).join('、') + ((entry.data.targets || []).length > 2 ? '…' : ''))
+                            : entry.data.scale + ' · ' + waveName(entry.data.wave))
+                        : '—'),
                       h('td', { className: 'is-score' }, ok ? String(entry.data.rows) : ''),
                       h('td', { className: 'is-score' }, ok ? entry.data.mapping.matched + '/' + entry.data.mapping.total : ''),
                       h('td', null, entry.imported
                         ? h('span', { className: 'sd-badge sd-badge-ok' }, '已导入')
                         : ok
-                          ? h('span', { className: 'sd-badge sd-badge-info' }, entry.data.rows + ' 行')
+                          ? h('span', { className: 'sd-badge sd-badge-info' }, entry.auto ? '自动匹配' : '手动指定')
                           : h('span', { className: 'sd-badge sd-badge-bad', title: entry.error }, '认不出')),
                       h('td', null, ok && !entry.imported
                         ? h(Btn, {
-                            children: busy === 'apply-' + index ? '导入中…' : '导入',
+                            children: busy === 'apply-' + index ? '导入中…' : entry.auto ? '导入全部匹配' : '导入这一组',
                             kind: 'outline',
                             small: true,
                             disabled: Boolean(busy),
                             onClick: event => { event.stopPropagation(); importAt(index) }
                           })
-                        : h('span', { className: 'sd-note' }, ok ? '' : entry.error || ''))
+                        : ok
+                          ? h('span', { className: 'sd-note' }, '')
+                          : h('div', { style: { display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }, onClick: event => event.stopPropagation() },
+                              h('select', {
+                                className: 'sd-select',
+                                style: { height: 24, maxWidth: 110, fontSize: 11 },
+                                value: (manual[index] || {}).scale || '',
+                                onChange: event => setManual(prev => ({ ...prev, [index]: { ...(prev[index] || {}), scale: event.target.value, wave: '' } }))
+                              },
+                                h('option', { value: '' }, '选量表'),
+                                data.instruments.map(item => h('option', { key: item.id, value: item.id }, item.short))
+                              ),
+                              h('select', {
+                                className: 'sd-select',
+                                style: { height: 24, maxWidth: 90, fontSize: 11 },
+                                value: (manual[index] || {}).wave || '',
+                                onChange: event => setManual(prev => ({ ...prev, [index]: { ...(prev[index] || {}), wave: event.target.value } }))
+                              },
+                                h('option', { value: '' }, '波次'),
+                                (((data.instruments.find(item => item.id === (manual[index] || {}).scale) || {}).waves) || []).map(item => h('option', { key: item, value: item }, waveName(item)))
+                              ),
+                              h(Btn, {
+                                children: busy === 'preview-' + index ? '识别中…' : '预览',
+                                kind: 'ghost',
+                                small: true,
+                                disabled: Boolean(busy),
+                                onClick: () => previewWithTarget(index)
+                              })
+                            ))
                     )
                   }))
                 )
@@ -1403,7 +1476,7 @@ window.__ModuleLoader__.load({
                 : null,
               h('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
                 Btn({
-                  children: busy === 'apply-' + focus ? '导入中…' : focused.imported ? '已导入' : '导入这一份',
+                  children: busy === 'apply-' + focus ? '导入中…' : focused.imported ? '已导入' : focused.auto ? '导入这份文件（全部匹配）' : '导入这一组',
                   kind: 'primary',
                   disabled: Boolean(busy) || focused.imported,
                   onClick: () => importAt(focus)
@@ -1731,6 +1804,26 @@ window.__ModuleLoader__.load({
       }, [scoreCols])
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+        h('div', { className: 'sd-card' },
+          h('div', { className: 'sd-card-head' }, h('h3', null, '这张表怎么看')),
+          h('div', { className: 'sd-legend' },
+            h('span', null, '一行 = 一个被试的编号；一列 = 他在某个量表某个阶段算出来的分。'),
+            h('span', null, '数字 = 已算出的分'),
+            h('span', null, '折算 = 缺了几题，按已答的题平均补上'),
+            h('span', null, '! = 缺太多，没算分'),
+            h('span', null, '重复 = 同一编号有多份，先去「录入 → 核对」留一份'),
+            h('span', null, '— = 这个阶段还没有他的作答')
+          ),
+          h('details', { className: 'sd-details' },
+            h('summary', null, '每一列是什么（点开对照）'),
+            h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(230px,1fr))', gap: '4px 12px', marginTop: 8 } },
+              data.scores.columns.map(col => h('div', { key: col.key, style: { display: 'flex', gap: 6, fontSize: 11.5 } },
+                h('span', { className: 'sd-mono', style: { color: 'var(--sd-text2)' } }, col.key),
+                h('span', null, '= ' + (col.label || '') + (col.kind === 'missing' ? '' : col.range ? '（' + col.range[0] + '–' + col.range[1] + '）' : ''))
+              ))
+            )
+          )
+        ),
         data.scores.stale
           ? h('div', { className: 'sd-alert sd-alert-warn', style: { margin: 0 } }, 'scores.csv 比作答或定义旧：点「重算」重建。面板显示的是内存里实时算出的值。')
           : null,
@@ -1871,7 +1964,7 @@ window.__ModuleLoader__.load({
      * ================================================================ */
 
     function ValidateTab({ data, busy, onValidate }) {
-      const [level, setLevel] = useState('all')
+      const [level, setLevel] = useState('warn')
       const [scale, setScale] = useState(ALL)
       const issues = (data.issues || []).filter(item => {
         if (level === 'bad' && item.level !== 'bad') return false
@@ -1882,6 +1975,14 @@ window.__ModuleLoader__.load({
       const counts = data.issueCounts || {}
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+        h('div', { className: 'sd-card' },
+          h('div', { className: 'sd-card-head' }, h('h3', null, '这些提示是什么意思')),
+          h('div', { className: 'sd-legend' },
+            h('span', null, '「必须处理」的会让分数算错或算不出来；「建议看看」多半是缺题或编号可疑；「提示」只是说明，可以不管。'),
+            h('span', null, '每条都写了两行：上面说哪里有问题，下面说怎么办。'),
+            h('span', null, '先看「必须处理」，没有就说明现有数据能算分。')
+          )
+        ),
         h('div', { className: 'sd-card' },
           h('div', { className: 'sd-card-head' },
             h('h3', null, '校验'),

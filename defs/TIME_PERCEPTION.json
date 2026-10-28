@@ -41,7 +41,16 @@
     "rule": "prorate",
     "minAnswered": 6
   },
-  "codes": {},
+  "codes": {
+    "ts": [
+      "Q3",
+      "Q3",
+      "Q3",
+      "Q3",
+      "Q3",
+      "Q3"
+    ]
+  },
   "source": "实验问卷题目整理.docx",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
   "notes": "时间紧张与碎片化的主观感受。不计分。",
@@ -50,7 +59,8 @@
   "short": "时间感受",
   "version": "自编（实验问卷题目整理）",
   "waves": [
-    "T0"
+    "T0",
+    "ts"
   ],
   "itemCount": 6,
   "response": {

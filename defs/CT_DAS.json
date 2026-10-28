@@ -6,7 +6,7 @@
   "version": "Templer（1970）；Yang et al.（2012）中文版，15 题",
   "waves": [
     "T0",
-    "T1"
+    "ts"
   ],
   "itemCount": 15,
   "response": {
@@ -141,26 +141,43 @@
   },
   "codes": {
     "T0": [
-      "t0_ctdas_01",
-      "t0_ctdas_02",
-      "t0_ctdas_03",
-      "t0_ctdas_04",
-      "t0_ctdas_05",
-      "t0_ctdas_06",
-      "t0_ctdas_07",
-      "t0_ctdas_08",
-      "t0_ctdas_09",
-      "t0_ctdas_10",
-      "t0_ctdas_11",
-      "t0_ctdas_12",
-      "t0_ctdas_13",
-      "t0_ctdas_14",
-      "t0_ctdas_15"
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas",
+      "t0_ctdas"
+    ],
+    "ts": [
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas",
+      "ts_ctdas"
     ]
   },
   "unit": "分",
   "decimals": 2,
   "source": "量表计分与来源.docx M13；Templer（1970）；Yang et al.（2012）中文版 α=.71、重测 .831",
   "license": "题目文本不入库：定义只存题号、反向标记、计分键与导出码。",
-  "notes": "反向题：第 2、3、5、6、7、15 题。15 项相加，范围 15–75，分数越高死亡焦虑越高。"
+  "notes": "反向题：第 2、3、5、6、7、15 题。15 项相加，范围 15–75。筛查问卷（ts_ctdas）与 T0（t0_ctdas）各测一次；旧文档里的 T1 版在导出的 T1 问卷中不存在，已去掉。"
 }

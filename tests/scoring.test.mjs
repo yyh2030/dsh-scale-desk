@@ -80,7 +80,7 @@ test('every shipped definition is internally consistent', () => {
 test('an unscored questionnaire records answers but produces no score column', () => {
   const def = byId('BACKGROUND')
   assert.equal(def.scoring.type, 'none')
-  assert.deepEqual(scoreColumns(def).map(col => col.key), ['BACKGROUND_T0_缺失'])
+  assert.deepEqual(scoreColumns(def).map(col => col.key), ['BACKGROUND_T0_缺失', 'BACKGROUND_ts_缺失'])
   const result = scoreAnswers(def, answers(5, 4))
   assert.equal(result.answered, 5)
   assert.deepEqual(result.subs, {})
@@ -209,7 +209,7 @@ test('detail rows keep the raw value next to the scored one', () => {
   assert.equal(item1.raw, '2')
   assert.equal(item1.scored, 3)
   assert.equal(item1.reverse, 'reverse')
-  assert.equal(item1.code, 't0_stais_01')
+  assert.equal(item1.code, 't0_stais')
   const csv = parseCsv(detailCsv(detail))
   assert.equal(csv[0].length, 9)
 })
