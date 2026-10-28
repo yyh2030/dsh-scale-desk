@@ -759,29 +759,29 @@ function findIdColumn(header, rows) {
   const normalized = header.map(name => normalizeCode(headerCode(name)))
   for (const alias of STRONG_ID_ALIASES) {
     const at = normalized.indexOf(normalizeCode(alias))
-    if (at >= 0) return { column: header[at], how: 'alias' }
+    if (at >= 0) return { column: header[at], index: at, how: 'alias' }
   }
   // QuestionPro names the participant question `t1_participant_id` and also
   // exports `Respondent Email` / `Response ID`; prefer the participant one.
   const isEmail = name => /email/i.test(String(name))
   const participant = normalized.findIndex((name, at) => !isEmail(header[at]) && /participant|编号|subjectid/.test(name))
-  if (participant >= 0) return { column: header[participant], how: 'fuzzy' }
+  if (participant >= 0) return { column: header[participant], index: participant, how: 'fuzzy' }
   const fuzzy = header.findIndex(name => !isEmail(name) && /编号|participant|respondent|subject/i.test(String(name)))
-  if (fuzzy >= 0) return { column: header[fuzzy], how: 'fuzzy' }
+  if (fuzzy >= 0) return { column: header[fuzzy], index: fuzzy, how: 'fuzzy' }
   for (const alias of WEAK_ID_ALIASES) {
     const at = normalized.indexOf(normalizeCode(alias))
-    if (at >= 0) return { column: header[at], how: 'weak-alias' }
+    if (at >= 0) return { column: header[at], index: at, how: 'weak-alias' }
   }
   // Last resort: a column whose every non-empty cell is a valid subject id.
   if (Array.isArray(rows) && rows.length) {
     for (let i = 0; i < header.length; i += 1) {
       const values = rows.map(row => String(row[i] ?? '').trim()).filter(Boolean)
       if (values.length && values.length >= Math.ceil(rows.length * 0.8) && values.every(value => isValidId(value))) {
-        return { column: header[i], how: 'values' }
+        return { column: header[i], index: i, how: 'values' }
       }
     }
   }
-  return { column: null, how: null }
+  return { column: null, index: -1, how: null }
 }
 
 /**
@@ -854,6 +854,7 @@ function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [],
   for (const item of def.items) {
     const code = codes[item.no - 1] || ''
     let column = null
+    let columnIndex = -1
     let how = null
     if (code) {
       const key = normalizeCode(code)
@@ -875,6 +876,7 @@ function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [],
       const at = candidates.find(index => !claimed.has(index))
       if (at !== undefined) {
         column = header[at]
+        columnIndex = at
         how = 'code'
         claimed.add(at)
       }
@@ -890,13 +892,14 @@ function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [],
         const norm = normalized[i]
         if (patterns.some(pattern => pattern.test(norm))) {
           column = header[i]
+          columnIndex = i
           how = 'number'
           claimed.add(i)
           break
         }
       }
     }
-    items.push({ no: item.no, code, column, how })
+    items.push({ no: item.no, code, column, index: columnIndex, how })
   }
 
   // 3. 题面相似：题码缺失或对不上时，按题目文字认列。QuestionPro 的
@@ -922,6 +925,7 @@ function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [],
     }
     if (best >= 0 && bestScore >= 0.6 && bestScore - secondScore >= 0.1) {
       item.column = header[best]
+      item.index = best
       item.how = 'text'
       claimed.add(best)
     }
@@ -935,6 +939,7 @@ function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [],
       open[0].forEach((at, index) => {
         const item = items[index]
         item.column = header[at]
+        item.index = at
         item.how = 'order'
         claimed.add(at)
       })
@@ -966,6 +971,7 @@ export function mapImportColumns(def, wave, header, rows, labels = [], allowOrde
   const unmatched = items.filter(item => !item.column).map(item => item.no)
   return {
     idColumn: id.column,
+    idIndex: id.index,
     idHow: id.how,
     items,
     unmatched,
@@ -1108,18 +1114,29 @@ export function applyImport(def, wave, table, mapping) {
   if (!table || !table.length) return { rows: [], issues: [], header: [] }
   const header = table[0].map(name => String(name ?? '').trim())
   const body = table.slice(1)
+  // Column names repeat in a QuestionPro matrix export, so positions are the
+  // only reliable key; fall back to consuming name matches in item order.
+  const byName = new Map()
+  header.forEach((name, at) => {
+    if (!byName.has(name)) byName.set(name, [])
+    byName.get(name).push(at)
+  })
   const columns = new Map()
   for (const item of mapping.items) {
     if (!item.column) continue
-    const at = header.indexOf(item.column)
-    if (at >= 0) columns.set(item.no, at)
+    const at = Number.isInteger(item.index) && item.index >= 0
+      ? item.index
+      : (byName.get(item.column) || []).shift()
+    if (Number.isInteger(at)) columns.set(item.no, at)
   }
   const rows = []
   const issues = []
   const seen = new Map()
   body.forEach((cells, offset) => {
     const line = offset + 2
-    const idAt = mapping.idColumn ? header.indexOf(mapping.idColumn) : -1
+    const idAt = Number.isInteger(mapping.idIndex) && mapping.idIndex >= 0
+      ? mapping.idIndex
+      : (mapping.idColumn ? header.indexOf(mapping.idColumn) : -1)
     const id = idAt >= 0 ? normalizeId(cells[idAt]) : ''
     if (!id) {
       issues.push(issue('bad', 'import', `第 ${line} 行没有编号，已跳过`, { line }))
@@ -1137,9 +1154,14 @@ export function applyImport(def, wave, table, mapping) {
       return
     }
     if (seen.has(id)) {
-      issues.push(issue('warn', 'import', `编号 ${id} 重复出现（第 ${seen.get(id).line}、${line} 行），保留后一行`, { line, id }))
-      seen.get(id).values = values
-      seen.get(id).line = line
+      const prior = seen.get(id)
+      const same = JSON.stringify(prior.values) === JSON.stringify(values)
+      if (same) {
+        issues.push(issue('info', 'import', `编号 ${id} 重复出现且答案相同（第 ${prior.line}、${line} 行），只留一份`, { line, id }))
+        return
+      }
+      issues.push(issue('warn', 'import', `编号 ${id} 重复出现且答案不同（第 ${prior.line}、${line} 行），两行都保留，请在核对里留一份`, { line, id }))
+      rows.push({ id, values, line })
       return
     }
     const row = { id, values, line }

@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -412,6 +413,32 @@ test('different codes still map when the item texts match', () => {
   assert.deepEqual(mapping.unmatched, [])
   assert.equal(mapping.items[3].column, header[4])
   assert.equal(mapping.items[3].how, 'text')
+})
+
+test('identical matrix headers are read by position, not by name', () => {
+  const def = normalizeDef(JSON.parse(readFileSync(new URL('../defs/FTPS.json', import.meta.url), 'utf8')))
+  const header = ['[t1_participant_id] 编号', ...Array.from({ length: 10 }, () => '[t1_ftps] 说明：同一句说明')]
+  const values = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+  const table = [header, ['11002', ...values]]
+  const mapping = mapImportColumns(def, 'T1', header, [table[1]])
+  assert.equal(mapping.matched, 10)
+  const applied = applyImport(def, 'T1', table, mapping)
+  assert.deepEqual(Object.values(applied.rows[0].values), values)
+})
+
+test('two submissions with the same id but different answers are both kept', () => {
+  const def = normalizeDef(JSON.parse(readFileSync(new URL('../defs/FTPS.json', import.meta.url), 'utf8')))
+  const header = ['[t1_participant_id] 编号', ...Array.from({ length: 10 }, () => '[t1_ftps] 说明')]
+  const table = [
+    header,
+    ['21013', ...Array(10).fill('6')],
+    ['21013', ...Array(10).fill('7')]
+  ]
+  const mapping = mapImportColumns(def, 'T1', header, table.slice(1))
+  const applied = applyImport(def, 'T1', table, mapping)
+  assert.equal(applied.rows.length, 2)
+  assert.equal(applied.rows[0].values[1], '6')
+  assert.equal(applied.rows[1].values[1], '7')
 })
 
 test('a single block with no codes falls back to column order', () => {
