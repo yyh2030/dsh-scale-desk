@@ -355,12 +355,37 @@ async function ensureSeeded(cfg) {
     await copyFile(PKG_FLOW, cfg.flowPath)
     shipped.push('flow.json')
   }
-  if (shipped.length) {
+  // A definition that the protocol or an answer file still points at must not
+  // vanish silently (it happened three times: SUPPORT/ADVERSE/DISCOMFORT).
+  const present = new Set(existing.map(name => name.replace(/\.json$/i, '')))
+  const wanted = new Set()
+  const flow = await readJson(cfg.flowPath, { stages: [] })
+  for (const stage of Array.isArray(flow.stages) ? flow.stages : []) {
+    for (const step of Array.isArray(stage && stage.steps) ? stage.steps : []) {
+      if (step && step.kind === 'scale' && step.scale) wanted.add(String(step.scale))
+    }
+  }
+  const answerFiles = await readdir(cfg.answersDir).catch(() => [])
+  for (const name of answerFiles) {
+    const match = /^(.+)__[^_]+\.csv$/i.exec(name)
+    if (match) wanted.add(match[1])
+  }
+  let restored = 0
+  for (const id of wanted) {
+    if (present.has(id)) continue
+    const source = path.join(PKG_DEFS, `${id}.json`)
+    const exists = await stat(source).then(() => true).catch(() => false)
+    if (!exists) continue
+    await copyFile(source, path.join(cfg.defsDir, `${id}.json`))
+    await appendProvenance(cfg, { action: 'reseed-def', scale: id, note: '定义缺失，已从插件包补回' }).catch(() => {})
+    restored += 1
+  }
+  if (shipped.length || restored) {
     const readme = path.join(cfg.scalesDir, 'README.md')
     const hasReadme = await stat(readme).then(() => true).catch(() => false)
     if (!hasReadme) await writeFile(readme, LAB_README, 'utf8')
   }
-  return shipped.length
+  return shipped.length + restored
 }
 
 /** The protocol: ordered stages, each with ordered steps. */
@@ -1142,6 +1167,117 @@ export function apply(ctx, config = {}) {
       })
       await syncScores()
       return { id: kept.id, removed: file.rows.length - rows.length }
+    },
+
+    /** Rows that look unusable: bad id format, or several submissions per id. */
+    async suspicious() {
+      const current = await model(false)
+      const entries = []
+      for (const file of current.answerFiles) {
+        const counts = new Map()
+        for (const row of file.rows) counts.set(row.id, (counts.get(row.id) || 0) + 1)
+        for (const row of file.rows) {
+          const reasons = []
+          if (!isValidId(row.id)) reasons.push('编号不是 5 位')
+          if ((counts.get(row.id) || 0) > 1) reasons.push('同编号 ' + counts.get(row.id) + ' 份')
+          if (!reasons.length) continue
+          entries.push({
+            scale: file.scale,
+            short: (current.defs.find(def => def.id === file.scale) || {}).short || file.scale,
+            wave: file.wave,
+            id: row.id,
+            answered: Object.values(row.values || {}).filter(value => String(value ?? '').trim()).length,
+            reasons
+          })
+        }
+      }
+      const byScale = new Map(current.defs.map(def => [def.id, def.short]))
+      for (const entry of entries) entry.short = byScale.get(entry.scale) || entry.scale
+      return { entries, total: entries.length }
+    },
+
+    /** Delete many (scale, wave, id) rows in one go. */
+    async bulkDelete(payload) {
+      const current = await model(false)
+      const targets = Array.isArray(payload && payload.targets) ? payload.targets : []
+      if (!targets.length) throw new RouteError('invalid', '没有选中要删的行')
+      const wanted = new Set(targets.map(item => `${item.scale}__${item.wave}__${item.id}`))
+      let removed = 0
+      const touched = []
+      for (const file of current.answerFiles) {
+        const kept = file.rows.filter(row => !wanted.has(`${file.scale}__${file.wave}__${row.id}`))
+        const dropped = file.rows.length - kept.length
+        if (!dropped) continue
+        const def = current.defs.find(item => item.id === file.scale)
+        await writeAnswerFile(cfg, file.scale, file.wave, kept, def ? def.itemCount : 0)
+        await appendProvenance(cfg, {
+          action: 'bulk-delete',
+          scale: file.scale,
+          wave: file.wave,
+          note: String((payload && payload.reason) || '批量删除') + `：${dropped} 行`,
+          rows: dropped
+        })
+        removed += dropped
+        touched.push({ scale: file.scale, wave: file.wave, removed: dropped })
+      }
+      await syncScores()
+      return { removed, touched }
+    },
+
+    /** Remove several subject ids from every answer file at once. */
+    async bulkDeleteSubjects(payload) {
+      const current = await model(false)
+      const ids = [...new Set((Array.isArray(payload && payload.ids) ? payload.ids : [])
+        .map(normalizeId).filter(Boolean))]
+      if (!ids.length) throw new RouteError('invalid', '没有选中要删的编号')
+      const wanted = new Set(ids)
+      let removed = 0
+      const touched = []
+      const perId = Object.fromEntries(ids.map(id => [id, 0]))
+      for (const file of current.answerFiles) {
+        const kept = file.rows.filter(row => !wanted.has(row.id))
+        const dropped = file.rows.length - kept.length
+        if (!dropped) continue
+        const def = current.defs.find(item => item.id === file.scale)
+        await writeAnswerFile(cfg, file.scale, file.wave, kept, def ? def.itemCount : 0)
+        await appendProvenance(cfg, {
+          action: 'bulk-delete',
+          scale: file.scale,
+          wave: file.wave,
+          note: `删除编号 ${ids.join('、')}：${dropped} 行`
+        })
+        removed += dropped
+        touched.push({ scale: file.scale, wave: file.wave, removed: dropped })
+        for (const row of file.rows) if (wanted.has(row.id)) perId[row.id] = (perId[row.id] || 0) + 1
+      }
+      await syncScores()
+      return { ids, removed, touched, perId }
+    },
+
+    /** Remove one subject id from every answer file (test submissions, typos). */
+    async deleteSubject(payload) {
+      const current = await model(false)
+      const id = normalizeId(payload && payload.id)
+      if (!id) throw new RouteError('invalid', '先填编号')
+      let removed = 0
+      const touched = []
+      for (const file of current.answerFiles) {
+        const kept = file.rows.filter(row => row.id !== id)
+        const dropped = file.rows.length - kept.length
+        if (!dropped) continue
+        const def = current.defs.find(item => item.id === file.scale)
+        await writeAnswerFile(cfg, file.scale, file.wave, kept, def ? def.itemCount : 0)
+        await appendProvenance(cfg, {
+          action: 'bulk-delete',
+          scale: file.scale,
+          wave: file.wave,
+          note: `删除编号 ${id}：${dropped} 行`
+        })
+        removed += dropped
+        touched.push({ scale: file.scale, wave: file.wave, removed: dropped })
+      }
+      await syncScores()
+      return { id, removed, touched }
     },
 
     /* ---------------- 量表库管理：新建、删除、改基本信息与计分 ---------------- */

@@ -1585,6 +1585,134 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ================================================================ *
+     * 批量清理（编号可疑、测试提交、重复提交）
+     * ================================================================ */
+
+    function CleanupPanel({ data, toast, refresh }) {
+      const [entries, setEntries] = useState([])
+      const [picked, setPicked] = useState({})
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const [manual, setManual] = useState('')
+
+      const load = useCallback(async () => {
+        try {
+          const result = await call('suspicious')
+          setEntries(result.entries || [])
+          setError('')
+        } catch (err) {
+          setError(err.message)
+        }
+      }, [])
+
+      useEffect(() => { load() }, [load])
+
+      const groups = useMemo(() => {
+        const byId = new Map()
+        for (const entry of entries) {
+          if (!byId.has(entry.id)) byId.set(entry.id, { id: entry.id, rows: [], reasons: new Set(), where: new Set() })
+          const group = byId.get(entry.id)
+          group.rows.push(entry)
+          for (const reason of entry.reasons) group.reasons.add(reason)
+          group.where.add((entry.short || entry.scale) + ' ' + waveName(entry.wave))
+        }
+        return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+      }, [entries])
+
+      const toggle = id => setPicked(prev => ({ ...prev, [id]: !prev[id] }))
+      const selected = groups.filter(group => picked[group.id]).map(group => group.id)
+      const allOn = groups.length > 0 && groups.every(group => picked[group.id])
+
+      const removeIds = async ids => {
+        const clean = ids.map(value => String(value || '').trim()).filter(Boolean)
+        if (!clean.length) return
+        setBusy('remove')
+        setError('')
+        try {
+          const result = await call('bulkDeleteSubjects', { ids: clean })
+          toast('已删除编号 ' + clean.join('、') + ' 的数据：' + result.removed + ' 行')
+          setPicked({})
+          setManual('')
+          await load()
+          if (refresh) refresh()
+        } catch (err) {
+          setError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }
+
+      return h('div', { className: 'sd-card' },
+        h('div', { className: 'sd-card-head' },
+          h('h3', null, '批量清理'),
+          h('span', { className: 'sd-note' }, '编号不是 5 位、或同一编号有多份的作答；勾选后一次删掉，跨所有量表与波次'),
+          h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+            Btn({ children: '重新扫描', kind: 'ghost', small: true, onClick: load, disabled: Boolean(busy) })
+          )
+        ),
+        error ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, error) : null,
+        groups.length
+          ? h('div', { className: 'sd-table-wrap', style: { maxHeight: 280 } },
+              h('table', { className: 'sd-table', style: { minWidth: 620 } },
+                h('thead', null, h('tr', null,
+                  h('th', { style: { width: 34 } }, h('input', {
+                    type: 'checkbox',
+                    checked: allOn,
+                    onChange: () => {
+                      const next = {}
+                      if (!allOn) for (const group of groups) next[group.id] = true
+                      setPicked(next)
+                    }
+                  })),
+                  h('th', null, '编号'),
+                  h('th', { className: 'is-score' }, '行数'),
+                  h('th', null, '原因'),
+                  h('th', null, '出现在')
+                )),
+                h('tbody', null, groups.map(group => h('tr', { key: group.id },
+                  h('td', null, h('input', { type: 'checkbox', checked: Boolean(picked[group.id]), onChange: () => toggle(group.id) })),
+                  h('td', { className: 'sd-mono' }, group.id),
+                  h('td', { className: 'is-score' }, String(group.rows.length)),
+                  h('td', { className: 'sd-note' }, [...group.reasons].join('；')),
+                  h('td', { className: 'sd-note', style: { maxWidth: 260 } }, [...group.where].slice(0, 6).join('、') + (group.where.size > 6 ? '…' : ''))
+                )))
+              )
+            )
+          : h('div', { className: 'sd-note' }, '没有编号可疑或重复的作答。'),
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          Btn({
+            children: busy === 'remove' ? '删除中…' : '删除选中编号的数据（' + selected.length + '）',
+            kind: 'primary',
+            small: true,
+            disabled: Boolean(busy) || !selected.length,
+            onClick: () => {
+              if (window.confirm && !window.confirm('删除编号 ' + selected.join('、') + ' 在所有量表与波次里的作答？此操作不可撤销。')) return
+              removeIds(selected)
+            }
+          }),
+          h('span', { className: 'sd-note' }, '或直接填一个编号：'),
+          h('input', {
+            className: 'sd-input',
+            style: { width: 120, height: 26 },
+            value: manual,
+            placeholder: '如 2030',
+            onChange: event => setManual(event.target.value)
+          }),
+          Btn({
+            children: '删除这个编号',
+            kind: 'outline',
+            small: true,
+            disabled: Boolean(busy) || !manual.trim(),
+            onClick: () => {
+              if (window.confirm && !window.confirm('删除编号 ' + manual.trim() + ' 的所有作答？')) return
+              removeIds([manual])
+            }
+          })
+        )
+      )
+    }
+
     function ReviewPanel({ data, toast, refresh }) {
       const [scaleId, setScaleId] = useState(data.instruments[0] ? data.instruments[0].id : '')
       const instrument = data.instruments.find(item => item.id === scaleId) || data.instruments[0]
@@ -1756,7 +1884,10 @@ window.__ModuleLoader__.load({
           ? h(SheetEntry, { data, busy: Boolean(busy), onSave: save, onClear: clear, toast, initial })
           : mode === 'import'
             ? h(ImportPanel, { data, toast, onImported: refresh })
-            : h(ReviewPanel, { data, toast, refresh })
+            : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+                h(CleanupPanel, { data, toast, refresh }),
+                h(ReviewPanel, { data, toast, refresh })
+              )
       )
     }
 
