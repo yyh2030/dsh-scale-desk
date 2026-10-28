@@ -19,6 +19,7 @@ import {
   guessTarget,
   mapImportColumns,
   normalizeDef,
+  parseItemTextTable,
   parseTable,
   parseValue,
   scoreAnswers,
@@ -279,4 +280,39 @@ test('scoreColumns is stable for a panel binding', () => {
     'DASS_21_week_total'
   ])
   assert.equal(columns.at(-1).kind, 'missing')
+})
+
+test('item text paste: numbered two-column rows', () => {
+  const result = parseItemTextTable('1\t示例一\n2\t示例二\n3\t示例三', 20)
+  assert.deepEqual(result.issues, [])
+  assert.deepEqual(result.items.map(item => item.no), [1, 2, 3])
+  assert.equal(result.items[0].text, '示例一')
+  assert.equal(result.numbered, true)
+})
+
+test('item text paste: plain lines fill in order, and 第N题 prefix works', () => {
+  const plain = parseItemTextTable('示例一\n示例二\n示例三', 9)
+  assert.deepEqual(plain.items.map(item => [item.no, item.text]), [[1, '示例一'], [2, '示例二'], [3, '示例三']])
+
+  const prefixed = parseItemTextTable('第3题 示例三', 20)
+  assert.deepEqual(prefixed.items, [{ no: 3, text: '示例三' }])
+})
+
+test('item text paste: full-width numbers, duplicates and out-of-range', () => {
+  const fullWidth = parseItemTextTable('１、示例一\n２、示例二', 9)
+  assert.deepEqual(fullWidth.items.map(item => item.no), [1, 2])
+
+  const dup = parseItemTextTable('1\t甲\n1\t乙', 9)
+  assert.ok(dup.issues.some(item => /重复/.test(item.text)))
+  assert.deepEqual(dup.items, [{ no: 1, text: '甲' }])
+
+  const overflow = parseItemTextTable('1\t甲\n12\t乙', 9)
+  assert.ok(overflow.issues.some(item => /超出/.test(item.text)))
+  assert.deepEqual(overflow.items.map(item => item.no), [1])
+})
+
+test('item text paste refuses mixed numbering instead of guessing', () => {
+  const mixed = parseItemTextTable('1\t甲\n乙\n3\t丙', 9)
+  assert.deepEqual(mixed.items, [])
+  assert.ok(mixed.issues.some(item => item.level === 'bad' && /混在一起/.test(item.text)))
 })

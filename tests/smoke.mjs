@@ -169,5 +169,26 @@ assert.equal(gbkPreview.scale, 'FTPS')
 assert.equal(gbkPreview.wave, 'T2')
 assert.equal(gbkPreview.mapping.matched, 10)
 
+/* 11. item texts: preview parses pasted rows, save writes only the text ----- */
+const pasted = await request(handler, 'POST', 'textsPreview', { scale: 'FTPS', text: '1\t甲\n2\t乙' })
+assert.equal(pasted.items.length, 2)
+assert.equal(pasted.items[0].no, 1)
+
+const lines = Array.from({ length: 10 }, (_, i) => `第${i + 1}题 测试题面${i + 1}`).join('\n')
+const allItems = await request(handler, 'POST', 'textsPreview', { scale: 'FTPS', text: lines })
+assert.equal(allItems.items.length, 10)
+const savedTexts = await request(handler, 'POST', 'saveTexts', { scale: 'FTPS', items: allItems.items })
+assert.equal(savedTexts.filled, 10)
+
+const defAfter = JSON.parse(await readFile(path.join(labDir, 'scales', 'defs', 'FTPS.json'), 'utf8'))
+assert.equal(defAfter.items[0].text, '测试题面1')
+assert.equal(defAfter.items[7].reverse, true, '保存题面不能动反向标记')
+assert.equal(defAfter.codes.T0.length, 10, '保存题面不能动导出码')
+
+const statusAfter = await request(handler, 'GET', 'status')
+assert.equal(statusAfter.instruments.find(item => item.id === 'FTPS').items[0].text, '测试题面1')
+
+await assert.rejects(request(handler, 'POST', 'saveTexts', { scale: 'FTPS', items: [{ no: 99, text: 'x' }] }))
+
 await rm(root, { recursive: true, force: true })
-console.log('smoke ok: seed → import → manual entry → score → validate → export → tools')
+console.log('smoke ok: seed → import → manual entry → score → validate → export → tools → item texts')

@@ -24,6 +24,7 @@ import {
   mapImportColumns,
   normalizeDef,
   normalizeId,
+  parseItemTextTable,
   parseTable,
   scoreAnswers,
   scoreColumns,
@@ -621,6 +622,54 @@ export function apply(ctx, config = {}) {
         unit: def.unit,
         file: def.file,
         columns: scoreColumns(def)
+      }
+    },
+
+    /** Parse pasted item texts for the editor's preview; writes nothing. */
+    async textsPreview(payload) {
+      const current = await model(false)
+      const def = findDef(current, String(payload && payload.scale))
+      const parsed = parseItemTextTable(payload && payload.text, def.itemCount)
+      return { scale: def.id, itemCount: def.itemCount, ...parsed }
+    },
+
+    /**
+     * Save item texts back into `_lab/scales/defs/<id>.json`. Only `items[].text`
+     * is touched: numbers, reverse marks, scoring keys and codes stay as they are.
+     */
+    async saveTexts(payload) {
+      const current = await model(false)
+      const def = findDef(current, String(payload && payload.scale))
+      const incoming = Array.isArray(payload && payload.items) ? payload.items : []
+      const texts = new Map()
+      for (const entry of incoming) {
+        const no = Number(entry && entry.no)
+        if (!Number.isInteger(no) || no < 1 || no > def.itemCount) {
+          throw new RouteError('invalid', `题号 ${entry && entry.no} 超出 1–${def.itemCount}`)
+        }
+        texts.set(no, String((entry && entry.text) === undefined || (entry && entry.text) === null ? '' : entry.text).trim().slice(0, 1000))
+      }
+      if (!texts.size) throw new RouteError('invalid', '没有收到任何题面')
+
+      const raw = JSON.parse(await readFile(def.file, 'utf8'))
+      const base = Array.isArray(raw.items) && raw.items.length === def.itemCount
+        ? raw.items
+        : def.items.map(item => ({ no: item.no, text: item.text, reverse: item.reverse }))
+      raw.items = base
+        .slice()
+        .sort((a, b) => Number(a.no) - Number(b.no))
+        .map(item => ({
+          ...item,
+          no: Number(item.no),
+          text: texts.has(Number(item.no)) ? texts.get(Number(item.no)) : String(item.text || '')
+        }))
+      // Keep the file readable for whoever opens it next.
+      await writeFileAtomic(def.file, JSON.stringify(raw, null, 2) + '\n')
+      invalidate()
+      return {
+        scale: def.id,
+        itemCount: def.itemCount,
+        filled: raw.items.filter(item => String(item.text || '').trim() !== '').length
       }
     },
 

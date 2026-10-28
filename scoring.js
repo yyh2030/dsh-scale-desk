@@ -717,6 +717,72 @@ export function guessTarget(defs, header, filename = '') {
 }
 
 /**
+ * Parse pasted item texts (one item per line) into `{no, text}` rows.
+ *
+ * Accepts a two-column paste from Word/Excel (`题号<TAB>题目`) or a plain list
+ * in item order. Mixed numbering is refused rather than guessed, because a
+ * wrong shift moves every reverse mark and every score by one item.
+ */
+export function parseItemTextTable(text, itemCount) {
+  const lines = String(text || '')
+    .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+  if (!lines.length) return { items: [], issues: [issue('bad', 'texts', '没有可读的行')] }
+
+  const prefixed = /^第\s*(\d{1,3})\s*题\s*[：:、.．\s]*(.+)$/
+  const numbered = /^[（(]?\s*(\d{1,3})\s*[)）]?\s*(?:[、.．:：,，\t]|\s)\s*(.+)$/
+
+  const parsed = []
+  let numberedCount = 0
+  for (const line of lines) {
+    const match = prefixed.exec(line) || numbered.exec(line)
+    if (match) {
+      numberedCount += 1
+      parsed.push({ no: Number(match[1]), text: match[2].trim() })
+    } else {
+      parsed.push({ no: null, text: line })
+    }
+  }
+
+  const issues = []
+  const byNo = new Map()
+  if (numberedCount === 0) {
+    parsed.forEach((entry, index) => {
+      if (index >= itemCount) {
+        issues.push(issue('warn', 'texts', `第 ${index + 1} 行超出题量 ${itemCount}，已忽略`))
+        return
+      }
+      byNo.set(index + 1, entry.text)
+    })
+  } else if (numberedCount !== parsed.length) {
+    return {
+      items: [],
+      issues: [issue('bad', 'texts', '有的行带题号、有的不带，混在一起没法判断顺序；要么全部带题号，要么全部按顺序排')]
+    }
+  } else {
+    for (const entry of parsed) {
+      if (entry.no < 1 || entry.no > itemCount) {
+        issues.push(issue('warn', 'texts', `题号 ${entry.no} 超出 1–${itemCount}，已忽略`))
+        continue
+      }
+      if (byNo.has(entry.no)) {
+        issues.push(issue('bad', 'texts', `题号 ${entry.no} 重复`))
+        continue
+      }
+      byNo.set(entry.no, entry.text)
+    }
+  }
+
+  const items = [...byNo.entries()]
+    .map(([no, text2]) => ({ no, text: text2.slice(0, 1000) }))
+    .sort((a, b) => a.no - b.no)
+  if (!items.length) issues.push(issue('bad', 'texts', '没有解析出任何题目'))
+  return { items, issues, numbered: numberedCount > 0 }
+}
+
+/**
  * Turn a parsed export into answer rows for one definition/wave. Raw text is
  * preserved; out-of-range or unparsable cells are reported, not repaired.
  */

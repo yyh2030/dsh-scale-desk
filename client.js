@@ -112,6 +112,8 @@ window.__ModuleLoader__.load({
 .sd-input,.sd-select{height:30px;padding:0 9px;border:1px solid var(--sd-line);border-radius:7px;background:var(--sd-bg);color:var(--sd-text);font-size:12.5px;outline:none;font-family:inherit;min-width:0}
 .sd-input:focus,.sd-select:focus{border-color:var(--sd-brand)}
 .sd-input.sd-id-input{width:88px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.sd-text-input{flex:1;min-width:0;height:26px;padding:0 7px;border:1px solid var(--sd-line);border-radius:6px;background:var(--sd-bg);color:var(--sd-text);font-size:11.5px;font-family:inherit;outline:none}
+.sd-text-input:focus{border-color:var(--sd-brand)}
 .sd-select{max-width:250px}
 .sd-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;color:var(--sd-text2)}
 .sd-matrix{display:flex;flex-direction:column;border:1px solid var(--sd-line);border-radius:10px;overflow:hidden;background:var(--sd-bg)}
@@ -213,29 +215,82 @@ window.__ModuleLoader__.load({
      * 量表库
      * ================================================================ */
 
-    function LibraryTab({ data, toast, onOpenFolder }) {
+    function LibraryTab({ data, toast, onOpenFolder, refresh }) {
       const [selected, setSelected] = useState(data.instruments[0] ? data.instruments[0].id : '')
       const [detail, setDetail] = useState(null)
       const [error, setError] = useState('')
+      const [version, setVersion] = useState(0)
+      const [editing, setEditing] = useState(false)
+      const [draft, setDraft] = useState([])
+      const [pasteText, setPasteText] = useState('')
+      const [pasteIssues, setPasteIssues] = useState([])
+      const [saveError, setSaveError] = useState('')
+      const [busy, setBusy] = useState('')
 
       useEffect(() => {
         let alive = true
         setDetail(null)
         setError('')
+        setEditing(false)
+        setPasteText('')
+        setPasteIssues([])
+        setSaveError('')
         if (!selected) return () => { alive = false }
         call('definition', { id: selected })
           .then(value => { if (alive) setDetail(value) })
           .catch(err => { if (alive) setError(err.message) })
         return () => { alive = false }
-      }, [selected])
+      }, [selected, version])
 
       const instrument = data.instruments.find(item => item.id === selected)
+
+      const parsePaste = useCallback(async () => {
+        if (!pasteText.trim()) return
+        setBusy('parse')
+        setSaveError('')
+        try {
+          const parsed = await call('textsPreview', { scale: selected, text: pasteText })
+          setPasteIssues(parsed.issues || [])
+          if (parsed.items && parsed.items.length) {
+            setDraft(prev => {
+              const map = new Map(prev.map(entry => [entry.no, entry.text]))
+              for (const entry of parsed.items) map.set(entry.no, entry.text)
+              return [...map.entries()].map(([no, text]) => ({ no, text })).sort((a, b) => a.no - b.no)
+            })
+            if (!(parsed.issues || []).some(item => item.level === 'bad')) {
+              toast('已填入 ' + parsed.items.length + ' 题，确认无误后点「保存题面」。')
+            }
+          }
+        } catch (err) {
+          setSaveError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }, [pasteText, selected, toast])
+
+      const saveTexts = useCallback(async () => {
+        setBusy('save')
+        setSaveError('')
+        try {
+          const result = await call('saveTexts', { scale: selected, items: draft })
+          setEditing(false)
+          setPasteText('')
+          setPasteIssues([])
+          setVersion(value => value + 1)
+          toast('已保存 ' + result.scale + ' 的 ' + result.filled + '/' + result.itemCount + ' 题题面。')
+          if (refresh) refresh()
+        } catch (err) {
+          setSaveError(err.message)
+        } finally {
+          setBusy('')
+        }
+      }, [draft, selected, toast, refresh])
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
         h('div', { className: 'sd-card' },
           h('div', { className: 'sd-card-head' },
             h('h3', null, '量表库'),
-            h('span', { className: 'sd-note' }, '定义在 _lab/scales/defs，改完回面板点「重算」；题目文本默认不收录'),
+            h('span', { className: 'sd-note' }, '定义存在 _lab/scales/defs；题面在下面直接编辑，不随插件分发'),
             h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
               Btn({ children: '打开定义文件夹', kind: 'ghost', small: true, onClick: () => onOpenFolder('scales') })
             )
@@ -286,15 +341,104 @@ window.__ModuleLoader__.load({
                   )
                 ),
                 h('div', { className: 'sd-card' },
-                  h('div', { className: 'sd-card-head' }, h('h3', null, '题目与反向标记')),
-                  h('div', { className: 'sd-matrix' },
-                    detail.items.map(item => h('div', { className: 'sd-item-row' + (item.reverse ? ' is-reverse' : ''), key: item.no },
-                      h('span', { className: 'sd-item-no' }, String(item.no), item.reverse ? h('span', { className: 'sd-badge sd-badge-warn' }, '反') : null),
-                      h('span', { className: 'sd-item-text' + (item.text ? '' : ' is-empty') }, item.text || ('第 ' + item.no + ' 题（文本未录入）')),
-                      h('span', { className: 'sd-note' }, detail.codes[instrument.waves[0]] ? detail.codes[instrument.waves[0]][item.no - 1] : '')
-                    ))
+                  h('div', { className: 'sd-card-head' },
+                    h('h3', null, '题目与反向标记'),
+                    h('span', { className: 'sd-note' }, editing ? '改完点「保存题面」，只动文字，不动反向标记与计分键' : '题目只存在本机 _lab，不随插件分发'),
+                    h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
+                      editing
+                        ? [
+                            h(Btn, {
+                              key: 'save',
+                              children: busy === 'save' ? '保存中…' : '保存题面',
+                              kind: 'primary',
+                              small: true,
+                              disabled: Boolean(busy),
+                              onClick: saveTexts
+                            }),
+                            h(Btn, {
+                              key: 'cancel',
+                              children: '取消',
+                              kind: 'ghost',
+                              small: true,
+                              disabled: Boolean(busy),
+                              onClick: () => {
+                                setEditing(false)
+                                setDraft([])
+                                setPasteText('')
+                                setPasteIssues([])
+                                setSaveError('')
+                              }
+                            })
+                          ]
+                        : Btn({
+                            children: '编辑题面',
+                            kind: 'outline',
+                            small: true,
+                            onClick: () => {
+                              setDraft(detail.items.map(item => ({ no: item.no, text: item.text || '' })))
+                              setEditing(true)
+                            }
+                          })
+                    )
                   ),
-                  h('div', { className: 'sd-note' }, '题目文本可选：在 _lab/scales/defs/' + instrument.id + '.json 的 items[].text 里补，面板会显示。题目本身不进插件仓库。')
+                  editing
+                    ? h('div', { className: 'sd-card', style: { background: 'var(--sd-bg)' } },
+                        h('details', { className: 'sd-details' },
+                          h('summary', null, '从 Word / Excel 粘贴题目（题号 + 题目，一行一题）'),
+                          h('textarea', {
+                            className: 'sd-input',
+                            style: { width: '100%', height: 130, marginTop: 8, padding: 8, fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 11.5, resize: 'vertical' },
+                            value: pasteText,
+                            placeholder: '1\t第 1 题的文字\n2\t第 2 题的文字\n（也可以只贴题目，按题号顺序自动排）',
+                            onChange: event => setPasteText(event.target.value)
+                          }),
+                          h('div', { style: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' } },
+                            Btn({
+                              children: busy === 'parse' ? '解析中…' : '解析并填入',
+                              kind: 'outline',
+                              small: true,
+                              disabled: Boolean(busy) || !pasteText.trim(),
+                              onClick: parsePaste
+                            }),
+                            h('span', { className: 'sd-note' }, '解析只填进下面的输入框，还要点「保存题面」才落盘')
+                          ),
+                          pasteIssues.length
+                            ? h('div', { className: 'sd-issues', style: { marginTop: 8 } },
+                                pasteIssues.map((item, index) => h('div', { className: 'sd-issue', key: index },
+                                  h('span', { className: 'sd-badge sd-badge-' + (item.level === 'bad' ? 'bad' : item.level === 'warn' ? 'warn' : 'info') }, item.level === 'bad' ? '高' : item.level === 'warn' ? '中' : '提示'),
+                                  h('span', { className: 'sd-issue-body' }, item.text)
+                                ))
+                              )
+                            : null
+                        )
+                      )
+                    : null,
+                  saveError ? h('div', { className: 'sd-alert sd-alert-bad', style: { margin: 0 } }, saveError) : null,
+                  h('div', { className: 'sd-matrix' },
+                    detail.items.map(item => {
+                      const current = editing
+                        ? (draft.find(entry => entry.no === item.no) || { text: '' })
+                        : item
+                      return h('div', { className: 'sd-item-row' + (item.reverse ? ' is-reverse' : ''), key: item.no },
+                        h('span', { className: 'sd-item-no' }, String(item.no), item.reverse ? h('span', { className: 'sd-badge sd-badge-warn' }, '反') : null),
+                        editing
+                          ? h('input', {
+                              className: 'sd-input sd-text-input',
+                              value: current.text || '',
+                              placeholder: '第 ' + item.no + ' 题（可留空）',
+                              onChange: event => {
+                                const value = event.target.value
+                                setDraft(prev => prev.map(entry => entry.no === item.no ? { ...entry, text: value } : entry))
+                              }
+                            })
+                          : h('span', { className: 'sd-item-text' + (item.text ? '' : ' is-empty') }, item.text || ('第 ' + item.no + ' 题（文本未录入）')),
+                        h('span', { className: 'sd-note' }, detail.codes[instrument.waves[0]] ? detail.codes[instrument.waves[0]][item.no - 1] : '')
+                      )
+                    })
+                  ),
+                  h('div', { className: 'sd-note' }, editing
+                    ? '题号与反向标记固定；换中文版就整份替换文字。保存后「录入 → 答题纸」立刻用新题面。'
+                    : '题目文本可选，点「编辑题面」逐题填，或从 Word 表格粘进来。')
                 )
               ),
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 } },
@@ -1188,7 +1332,7 @@ window.__ModuleLoader__.load({
           !data
             ? h(Empty, { title: '正在读 _lab…' }, '第一次打开会把 6 个量表定义播种到 _lab/scales/defs。')
             : tab === 'library'
-              ? h(LibraryTab, { data, onOpenFolder: openFolder })
+              ? h(LibraryTab, { data, toast, refresh, onOpenFolder: openFolder })
               : tab === 'entry'
                 ? h(EntryTab, { data, toast, refresh })
                 : tab === 'scores'
