@@ -29,7 +29,7 @@ def pick_sheet(workbook):
 
 
 def cell(value):
-    """Excel 把编号存成数字时 openpyxl 读出来是 float（11002.0），导出成文本要还原成 11002。"""
+    """Excel 把编号存成数字时 openpyxl 读出来是 float（12345.0），导出成文本要还原成 12345。"""
     if value is None:
         return ''
     if isinstance(value, float) and value.is_integer():

@@ -107,8 +107,8 @@ export function normalizeCode(value) {
 
 export function normalizeId(value) {
   let text = String(value === null || value === undefined ? '' : value).trim()
-  // Excel/QuestionPro 常把编号存成数字再导出成 "11002.0"：去掉无意义的小数零，
-  // 否则同一个 11002 会被当成两个不同编号（一个合格、一个被跳过）。
+  // Excel/QuestionPro 常把编号存成数字再导出成 "12345.0"：去掉无意义的小数零，
+  // 否则同一个 12345 会被当成两个不同编号（一个合格、一个被跳过）。
   if (/^\d+\.0+$/.test(text)) text = text.replace(/\.0+$/, '')
   return text
 }
