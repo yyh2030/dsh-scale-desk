@@ -2,7 +2,7 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)(`dsh`)写的研究插件:量表计分台。量表定义、作答录入、列映射导入、一键计分与质控校验放在同一个面板里,分数从哪一版定义、哪一版作答算出来是可追溯的。
 
-版本 0.2.0 · 需要 DSH ≥ 0.2.2-rc.1 · MIT 许可 · 依赖 [`@local/research-core`](https://github.com/yyh33028-netizen/dsh-research-core)
+版本 0.2.0 · 需要 DSH ≥ 0.2.2-rc.1 · MIT 许可 · 依赖 [`@local/research-core`](https://github.com/yyh2030/dsh-research-core)
 
 ## 为什么需要它
 
@@ -36,15 +36,15 @@
 ## 安装
 
 ```powershell
-git clone https://github.com/yyh33028-netizen/dsh-research-core.git
-git clone https://github.com/yyh33028-netizen/dsh-scale-desk.git
+git clone https://github.com/yyh2030/dsh-research-core.git
+git clone https://github.com/yyh2030/dsh-scale-desk.git
 dsh plugin --profile <profile> add link:<父目录>\dsh-scale-desk
 ```
 
 或者用 git 形式:
 
 ```powershell
-dsh plugin --profile <profile> add git+https://github.com/yyh33028-netizen/dsh-scale-desk.git
+dsh plugin --profile <profile> add git+https://github.com/yyh2030/dsh-scale-desk.git
 ```
 
 两种方式都要求 `research-core` 与本插件同级,插件用相对路径 `../research-core/host.mjs` 引用共享核心。仓库是私有的,安装前需要有访问权限。装完重启承载 `dsh web` 的进程,面板改动需要刷新页面。
