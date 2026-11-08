@@ -1,216 +1,44 @@
-# 量表计分（@local/scale-desk）
+# 量表计分
 
-DSH Web 界面左侧的「量表计分」。把**施测流程、问卷定义、原始作答、分数**摊开成可核查的几层，谁算的、按哪版算的、第几个阶段做的，都能回看。
+定义驱动的量表库、问卷录入、列映射导入、计分与质控。默认是内存中的空研究；状态、校验与工具查询不创建目录、不播种定义、不写分数。研究材料和作答均由使用者显式配置。
 
-只读研究材料；写入只发生在 `_lab/`：`scales/flow.json`（施测流程）、`scales/defs`（定义）、`scales/answers`（原始作答）、`scales/imports.json`（导入与录入记录）、`scores.csv` / `scores_detail.csv` / `data_wide.csv`（派生分数）、`export/`（导出）。本机把 `labDir` 配在 **`D:/yyh-lab`**（不在 OneDrive），研究材料仍从 `projectRoot` 只读。
+## 研究连接
 
-覆盖面按实验问卷与 **QuestionPro 2026-10 导出版本**：**26 份问卷**（6 份计分量表 + 20 份只收集作答的问卷，含选择题、数值题与文本题），分 9 个阶段。Survey_meta、想象／回忆评价、T1 FTPS 的题号与题量以导出表头为准；尚无导出的问卷仍按文档。MS 写作与 EFT/ERT 音频的指导语不放进插件，按实验材料执行。
+插件配置可给 `studyPath` 指向本机研究JSON。研究的 `schemaVersion` 为1，包含 `studyId`、`name`、`dataRoot`、`participantId`、`participants`、`visits`、`tasks`、`followups` 和 `plugins.scales`。相对路径以研究文件所在目录解析。未给研究文件时使用工作目录下 `_lab` 作为默认数据目录；`projectRoot`、`labDir`、`scalesDir`、`subjectsPath` 显式配置仍可使用。
 
-## 三层分开
+「研究」页支持连接已有路径、编辑JSON、验证预览及保存。连接使用同Host内共享的prepare/commit/rollback协调器切换已注册研究插件；状态列出参与切换的插件与一致性。未注册插件仍需单独配置。已有文件保存需要版本一致。不同研究ID不能写入同一个已认领的数据目录。
 
-| 层 | 位置 | 是什么 | 能不能删 |
-|---|---|---|---|
-| 流程 | `_lab/scales/flow.json` | 阶段与步骤的施测顺序，量表步骤指向 定义+波次 | 能，改了按包内版本重播种 |
-| 定义 | `_lab/scales/defs/<量表>.json` | 题号、反向标记、计分键、缺失规则、导出码、出处、版本、指导语 | 不能，删了要重写 |
-| 原始作答 | `_lab/scales/answers/<量表>__<波次>.csv` | `编号,q01,q02,...`，空格 = 缺失，保留原始文本 | 不能，这是原始数据 |
-| 派生分数 | `_lab/scores.csv`、`_lab/scores_detail.csv`、`_lab/data_wide.csv` | 宽表分数、每题明细、分数与题目合并的宽表 | 能，每次录入或导入后自动重算，也可点「重算」 |
+`sample-study.json` 与 `sample-def.json` 是完全虚构的花园体验演示，不具有研究或临床效度。「初始化空目录」或「加入虚构花园示例」才会写入目录。定义全部删除后保持空白。
 
-这条分工对应设计稿的三条约定：原始数据只读、派生可重算、版本单独记（`imports.json` 记每批数据录入时的定义版本）。
+## 数据与编号
 
-`data_wide.csv` 是给分析的整合表：一行一个被试，先是全部量表分与缺失列，再是每一题的原始作答（列名 `量表_波次_q01`），不需要再自己做 merge。
+参与者编号按字符串处理，保留前导零、字母及Unicode。默认需非空且不含控制字符；研究可设置 `participantId.pattern`，所有录入、导入和改号使用同一规则。组别独立保存在参与者表。数值型Excel已经丢失的显示格式无法自动恢复。
 
+量表定义在 `scales/defs`，作答在 `scales/answers`。新作答CSV包含 `definitionHash`、`submissionId` 与题目原值；不可变定义快照在 `definition-history`。旧CSV可读取并标记未知定义版本，查询不回写旧作答。版本漂移按每行hash检查。
 
-## 六个计分量表
+定义先验证原始schema、题号和反向冲突再归一化；错误定义不会产生正式分数。Likert按整数档位，数值题允许小数并按逐题范围反向。合法选项与文本先于缺失码识别。分量表可指定 `minAnswered`；未指定时按声明的 `minProportion` 或整表门槛比例计算。strict规则缺一题不计分。
 
-| 量表 | 题量 | 取值 | 反向题 | 计分 | 波次 | 导出码 |
-|---|---|---|---|---|---|---|
-| FTPS 未来时间洞察力 | 10 | 1–7 | 8、9、10 | 均分 1–7 | T0 / T1 / T2 | `t{n}_ftps_01..10` |
-| PANAS-NA 此刻版 | 9 | 1–5 | 无 | 均分 1–5 | T0 / T2 | `t{n}_na_01..09` |
-| PANAS-NA 过去一周版 | 9 | 1–5 | 无 | 均分 1–5 | week | `week_na_01..09` |
-| STAI-S 状态焦虑 | 20 | 1–4 | 1、2、5、8、10、11、15、16、19、20 | 累加 20–80 | T0 / T2 | `t{n}_stais_01..20` |
-| CT-DAS 死亡焦虑 | 15 | 1–5 | 2、3、5、6、7、15 | 累加 15–75 | T0 / T1 | `t0_ctdas_01..15` |
-| DASS-21 | 21 | 0–3 | 无 | 三份量表和 ×2，各 0–42；总分（描述性）= 原始和 0–63 | week | `week_dass_01..21` |
+## 导入与编辑
 
-出处与信度抄自 `02_实验材料与问卷/量表计分与来源.docx`：
-FTPS 抄 M04；PANAS-NA 抄 M05/M19（邱林等 2008）；STAI-S 抄 M06；CT-DAS 抄 M13（Templer 1970；Yang et al. 2012）；DASS-21 抄 M20（Lovibond & Lovibond 1995；龚栩等 2010）。
+导入预览接受位置映射；`idIndex`、`items[].index` 从0开始，题目缺失列为-1，名称仅显示。改列与编号列重新计算预览；重复同名列按位置区分。通用Q题号、题面及顺序只产生候选，需明确量表与波次。专用码的多个目标只有列集合不重叠时才可批量确认。`importFile` 必须传 `targets: [{ scale, wave, mapping }]`。
 
-**此刻版与过去一周版是两个量表**，分数不可比，所以定义里分成 `PANAS_NA_NOW` 与 `PANAS_NA_WEEK`，列名也分开。同理 FTPS 三个波次同在一列族里但按波次分列。
+元信息编辑只提交变化的计分字段；单纯更名、说明或指导语不会重建原计分对象、子集、乘数和输出键。添加波次不改旧导出码。导入不自动学习或覆盖定义映射。
 
-## 其余二十份问卷（只收集，不计分）
+重复作答保留原值，宽表、明细接口、工具和导出一致标为duplicate并不出正式分。先在核对页选择一份。各写操作在插件实例内排队。所有写请求必须带当前 `studyId`、`contextRevision` 和 `selectionRevision`，防止旧连接在A→B→A后写入；带 `expectedRevision` 可拒绝旧数据覆盖。浏览器自动附带这些字段，成功响应返回最新revision。
 
-按施测顺序：总体状态、时间感受、情绪补充、身体状态（Distracting 前段）；想象／回忆过程评价表；Survey_meta 六块（一致比例、影响、损失评价、收益评价、方向、即时情绪）；Survey_post（金钱态度、使用习惯、遇事求助、三道数学题、冲动性、认知需求）；当前不适评分、结束时的支持需求、一周随访的不良体验与支持需求。
+## 派生与错误
 
-它们的定义 `scoring.type` 是 `none`：**能录、能导出原始值、不产生分数列**，也不做反向或折算。`scores.csv` 里只留每个波次的一列 `_缺失`。Survey_meta 的 0–100 比例题、方向题与三题情绪题的锚点各不相同，这些都写进题面与定义说明，避免被当成 1–5 直接相加。
+重算生成分数、题目明细与宽表。每代输出在 `score-generations`，并保存输入作答、编号集合、定义和计分代码快照。`scores-manifest.json` 是同代文件与输入/定义hash的权威清单，读取者应优先使用其不可变代路径。平面CSV仅为兼容镜像，进程被终止时不能保证镜像永远同代。
 
-原文档没有给反向计分规则的（冲动性、认知需求）也没有标反向，若之后要算总分得先确认题号。
+每次数据写入先保存持久事务快照，普通异常回滚原始作答、日志和兼容派生。若进程中断或回滚失败，状态的 `transaction` 显示待恢复状态，并阻止继续写入；界面「恢复未完成事务」调用 `recover` 回到写入前快照。definition-history已有内容须hash一致，不覆盖损坏快照。实例内队列不构成多个Host进程间的锁。
 
-Survey_meta 的题目结构以 2026-10 的 QuestionPro 导出为准：`meta_ai_request_rate` 6 题、`meta_in-C5` 5 题、`meta_ai_eval_core` 5 题、`meta_ai-C5` 5 题、`meta_gain_direction` 1 题、情绪 3 题；旧的「AI 反抗」3 题在新版问卷里已经没有了，定义与流程里的对应项已删除。
+`.xlsx`通过Python/openpyxl读取。可显式配置 `pythonPath`，否则使用环境 `DSH_PYTHON_PATH` 或PATH中的 `python`。纯CSV/TSV导入无需Python。
 
-## 题目类型
-
-题型由 `items[].kind` 决定，答题纸按题型换控件，答案一律按原文存进 `answers/*.csv`：
-
-| kind | 控件 | 存法 |
-|---|---|---|
-| `likert`（默认） | 档位按钮；超过 12 档自动换数字框 | `1`、`5`、`0.05` |
-| `number` | 数字框，可带小数与自己上下限（如球拍球题 0–10） | `0.05` |
-| `choice` | 单选按钮组（如吸烟状态 A/B/C） | 选项值 `B` |
-| `multi` | 多选按钮组（如支持需求） | 逗号分隔 `私下交谈,获取校内心理支持信息` |
-| `text` | 文本框（如药物名称、联系方式） | 原文 |
-
-选择题的可选项写在定义里，答了不在选项里的值不会被静默接受，校验会指出来；文本题只受 `maxLength` 限制。身体状态、数学题、支持需求、不良体验这四份就是混合题型的定义。
-
-
-## 计分器只做四件事
-
-1. 求和 / 均分（`scoring.type`: `sum` | `mean`）；
-2. 反向计分（逐题 `reverse`，`min + max - 值`）；
-3. 缺失按比例折算（`prorate`：`(已答之和 / 已答数) × 题量 × 乘数`；`strict`：缺一题即不计分）；
-4. 分量表汇总（`scoring.subscales`，可设 `items`、`multiplier`、`range`、`minAnswered`）。
-
-不做统计检验，那是分析直通的事。取值范围只在定义里声明，用于校验「声明范围」与「题量 × 取值」是否自相矛盾，不参与计算。
-
-缺失门槛是**没有文献依据的默认值**，按 80% 取整：FTPS 8、PANAS 7、STAI 18（设计稿给的值）、CT-DAS 12、DASS 每个分量表 6、总分 18。要改就改定义里的 `missing.minAnswered`，面板与导出都会跟着变。低于门槛的记「未计分」，不写 0 分，也不猜。
-
-## 列名规则
-
-`scores.csv` 第一列是 `编号`，之后：
-
-- 单分量表：`量表_波次`，如 `FTPS_T0`、`STAI_S_T2`、`CT_DAS_T0`；
-- 多分量表：`量表_波次_分量表`，如 `DASS_21_week_stress` / `_anxiety` / `_depression` / `_total`；
-- 每个波次另有一列 `量表_波次_缺失`（缺题数）；不计分的问卷只有这一列。
-
-`scores_detail.csv` 是长表：`编号,量表,波次,题号,导出码,反向,原始值,计分值,备注`，用来核查反向题是否翻对了；不计分的问卷也能从这里拿原始值。
-
-`data_wide.csv` 把两者并排：`编号` + 全部分数与缺失列 + 全部题目列（`量表_波次_q01`，原始作答）。题目列按定义的题号顺序排，重复编号的行在这份表里留空。
-
-## 三条入口
-
-1. **外部导入**：QuestionPro / 问卷星 / Excel 的 `.xlsx`、CSV、TSV 都认。Excel 走本机 Python（openpyxl）转成表格，优先读 `Raw Data` 工作表；CSV 先试 UTF-8，再试 GBK / GB18030。列名先认导出码（`t0_stais_01`），认不出再认 `Q1` / `第1题` / 纯数字列；预览时可手动改每题对应哪一列。导入只存原始文本，越界值不修，留给校验报出来。
-
-   - 一次可以选多个文件，批量预览后逐个或一次导入；每个文件单独显示识别到的量表、波次、行数与匹配数。
-   - 一份导出里通常有多组量表（T0 就有 FTPS/PANAS/STAI/CT-DAS 四组），「导入全部匹配」会把它们一次全部写进各自的作答文件；认不出的文件可以在行内选量表与波次再预览。
-   - 认列的优先级：题码 → 题目文字相似度（用导出的第二行表头或列名）→ 单组列的顺序。所以换一套题码、或者新问卷还没配码，也能先导进来。
-   - 靠文字/顺序认出来的列，导入成功后会把题码写回本地定义（`_lab/scales/defs/<量表>.json`，并记一条 `learn-codes`），下次同一份问卷就按题码直接对上，不必再猜。
-   - 题码按 QuestionPro 2026-10 导出的真实值对齐：`t0_ftps`、`t0_na`、`t0_stais`、`t0_ctdas`、`ts_ctdas`、`week_na`、`week_dass`、`post_ai_money`… 矩阵题在导出里重复同一个题码，映射按出现顺序对到题号。
-   - QuestionPro 导出里 `Response ID` 不会抢走编号列：有 `participant` / `编号` 之类列时优先用它。
-   - 导出时如果选成了汇总报告，`Raw Data` 只有一行表头，预览会直接提示「只有表头、没有作答行」，不会当成乱码报错。
-2. **手工录入**：选量表、波次、编号，在答题纸上作答。档位题用按钮（超过 12 档自动换成数字框），选择题用选项按钮，数值题用数字框，文本题用输入框；文本、选项与数值都按原文落盘。已录过的会载入原值，改完再存。反向题在答题纸上标橙底（主试视角；被试问卷里不该出现反向标记）。
-3. **以后** PsychoPy 问卷模块直接写 `answers/*.csv`，格式一样即可。
-
-## 面板五页
-
-- **量表库**：26 张卡（题量、计分方式、波次、已录份数、版本）。量表本身也能在这里改，不必找 agent：
-  - 「新建量表」填 id、名称、题量、取值上下限、波次、计分方式（累加/均分/不计分）、反向题号、缺失门槛，直接建一份定义；
-  - 「编辑信息」改名称、简称、版本、计分说明、指导语；单分量表还能改计分方式、反向题号与缺失门槛（多分量表的计分键仍回 JSON 改）；
-  - 「删除量表」会删定义，并把它从流程里引用它的步骤一并移除；已经有作答的量表会拒绝删除，先删作答。
-- **流程**：按实验顺序列出 9 个阶段，每步标明类型（量表/任务/纸质/人口学/音频/书写/问卷/练习）与说明；量表步骤带波次、已录份数与「录入」按钮，直接跳到答题纸。
-- **录入**：三个子页。
-  - **手填答题纸**：按题型作答，已录过的会载入原值。
-  - **导入导出文件**：映射预览、样本行、越界提示、合并或覆盖。
-  - **核对与修正**：列出某量表某波次的每一份作答。可「改编号」修错号、「删除」多录的、重复编号时「保留这份」；有一份重复未处理时，这一段不参与计分，计分表里显示「重复」。
-- **计分**：宽表（按量表分组的两层表头，缺题与未计分带 `!`），筛选「有未计分 / 有折算 / 有整份未录 / 有重复编号」；点行看该被试每个波次的**每题明细**（原始值 → 反向后计分值）。「重算并写 scores.csv」「导出分数与报告」（报告含 scores、scores_detail 与 data_wide 三份）。
-- **校验**：定义与数据两边都查，分高 / 中 / 提示三级，可按量表筛。
-
-## 重复编号与改号
-
-同一量表同一波次里，一个编号出现多行就是「重复」。导入时：内容完全相同视为重复导入，原位替换；内容不同就保留两行并标出来，等人在「核对」里选。
-
-有重复的编号**整段不计分**（单元格显示「重复」），校验里也会报一条高优先级，直到勾选「保留这份」或删掉一份。改编号时如果目标编号已经有作答，会被拒绝——先处理掉那份，避免把两个人的数据并成一份。
-
-## 校验查什么
-
-定义：题量为 0、题号重复、计分键引用不存在的题、反向列表与逐题标记不一致、声明范围与题量算出的不符、导出码数量不符或重复、没写版本、分量表共用题号（描述性总分除外）。
-
-数据：编号不是 5 位、编号重复、作答越界或认不出、缺失过多未计分、折算缺题、某波次整批未录、某量表缺几个人、**定义版本漂移**（`imports.json` 里那批数据是按旧版本录的）。
-
-## Agent 工具
-
-- `scale_flow()` —— 按施测顺序列出阶段与步骤，量表步骤带波次与已录份数。
-- `scale_list()` —— 量表库：题量、计分、反向题、波次、已录人数、版本。
-- `scale_score(id?, scale?)` —— 给编号看该被试各量表各波次分数与缺失；不给编号看全表摘要。
-- `scale_validate(id?, level?)` —— 定义与数据问题清单，只读。
-
-## 接口
-
-`/api/scale-desk`，同源 + 请求头 `x-scale-desk: 1`：
-
-- `GET ?action=status` —— 面板全量快照（定义摘要、流程、分数宽表、问题清单、导入记录）
-- `GET ?action=refresh` —— 绕过 5 秒内存缓存重读
-- `POST {action:'definition', payload:{id}}` —— 单个定义的完整内容
-- `POST {action:'answer', payload:{id, scale, wave}}` —— 某人某份的作答
-- `POST {action:'detail', payload:{id, scale, wave}}` —— 每题原始值 / 反向后值
-- `POST {action:'save', payload:{id, scale, wave, values}}` —— 手填保存
-- `POST {action:'clear', payload:{id, scale, wave}}` —— 删除某人某份
-- `POST {action:'answers', payload:{scale, wave}}` —— 某量表某波次的逐行列表（含重复标记）
-- `POST {action:'renameAnswer', payload:{scale, wave, index, to}}` —— 改某一行的编号
-- `POST {action:'deleteAnswerRow', payload:{scale, wave, index}}` —— 删除某一行
-- `POST {action:'keepAnswer', payload:{scale, wave, index}}` —— 重复编号里保留这一行、删掉同编号其余行
-- `POST {action:'createScale', payload:{id, name, short, itemCount, min, max, waves, scoringType, reverse, minAnswered}}` —— 新建定义
-- `POST {action:'saveMeta', payload:{scale, name, short, version, notes, instructions, scoringType?, reverse?, minAnswered?}}` —— 改基本信息与计分设置
-- `POST {action:'deleteScale', payload:{scale}}` —— 删定义（有作答则拒绝；同时移除流程里引用它的步骤）
-- `POST {action:'importPreview', payload:{data|text, filename, scale?, wave?}}` —— 识别映射，不写盘（`data` 可以是 CSV/TSV 的 base64，也可以是 `.xlsx` 的 base64）
-- `POST {action:'importApply', payload:{data|text, filename, scale, wave, mode, mapping}}` —— 落盘（`merge` / `replace`）
-- `POST {action:'score'}` —— 重算并写 `scores.csv` + `scores_detail.csv` + `data_wide.csv`
-- `POST {action:'validate'}` —— 重新校验
-- `POST {action:'export'}` —— 写 `_lab/export/量表分数_YYYYMMDD.csv`、`分数与题目宽表_YYYYMMDD.csv` 与 `.md`
-- `POST {action:'reveal', payload:{target}}` —— 打开 `scales` / `lab` / `export` 目录
-
-## 与运行台、分析直通的关系
-
-- **运行台**只需要 `_lab/scores.csv`：`编号` + 各列 + `_缺失` 列就能算「量表完成度」，不需要知道怎么算的。这一步还没接（运行台当前没有量表列）。
-- **分析直通**的第 3 阶段 merge 直接读 `scores.csv` 与 `scores_detail.csv`，把 `编号` 并到 AUC 宽表上。`runs/<runId>/meta.json` 的 `scriptHash` 之外，建议把 `scores.csv` 的列清单也记一份，防止定义改版后历史结果对不上。
-
-## 版权与版本
-
-- 定义里**不存题目文本**，只存题号、反向标记、计分键与导出码；题面与指导语在面板「量表库 → 编辑题面」里补（写进本地 `_lab/scales/defs/<量表>.json`），不进这个仓库。这样中文版授权状况不明时也能先计分。
-- 同一个量表的中文版可能有多版，`version` 必须写清。改版后旧批次会被校验标成「版本漂移」，而不是静默混算。
-- **CT-DAS 在文档里 T0 与 T1 各测一次**（Phase 3 即写作任务后）。此前 QuestionPro 的 T1 问卷只有 FTPS，两处口径不一致；插件按这份文档给 CT-DAS 加了 T1 波次，若实际 T1 不测，把该波次删掉即可。T1 目前没有导出码，若改用平台收集需要补前缀。
-
-## 题目文本
-
-定义里 `items[].text` 与 `instructions` 默认是空的（题目与指导语不随插件仓库分发）。补题面在面板里就能做，不用改 JSON：
-
-1. **量表库 → 选中量表 →「编辑题面」**：逐题在输入框里改；或者把「题号 + 题目」两列从 Word / Excel 粘进「从 Word / Excel 粘贴题目」，点「解析并填入」，检查后点「保存题面」。
-2. 保存只改 `items[].text`，题号、反向标记、计分键、导出码都不动；落盘到 `_lab/scales/defs/<量表>.json`。
-3. 保存后「录入 → 答题纸」和「量表库」立刻用新题面，不用重启。批量脚本仍可直接改那个 JSON。
-
-粘贴规则：`1<TAB>题目`、`1. 题目`、`1、题目`、`第1题 题目` 都认；不带题号就按行序填。**带号和不带号混在一段里会被拒绝**，因为错位会让每道反向题和总分整体挪一位，不如让人看一眼。
-
-本机这 21 份定义已经照 `02_实验材料与问卷/实验问卷题目整理.docx` 的题表与指导语填好（六个计分量表 + 总体状态 5、时间感受 6、情绪补充 4、想象评价 10、AI 比例 2、AI 影响 4、AI 评价 7、AI 反抗 3、决策后情绪 3、AI 金钱 4、AI 习惯 11、AI 求助 4、冲动性 8、认知需求 18、不适评分 1），换了版本就整份替换。`text` 为空的题显示「第 n 题（文本未录入）」，不影响计分。
-
-## 波次
-
-同一份量表在多个阶段施测，是**一份定义 + 多个波次**，不是复制量表。波次也在面板里改：**量表库 → 选中量表 →「波次与导出码」→「编辑波次」**。
-
-- 添加：按现有 `T0/T1/T2` 自动建议下一个名字与前缀，两列分别填波次名和导出码前缀；
-- 删除：只能删还没有作答的波次。已有作答的波次会被拒绝并说明有几个人，先把那一波次的作答导出或删除；
-- 导出码由「前缀 + 01…NN」自动生成，位数与题量对齐（如 `t3_ftps_01 … t3_ftps_10`）；前缀留空就不生成码，导入时退回到按列名 / 题号匹配；
-- 波次名会进文件名（`answers/FTPS__T3.csv`）和分数列名（`FTPS_T3`），只能用字母、数字和 `. _ -`。
-
-保存后 `scores.csv` 的列与「录入」页的波次下拉立刻跟着变，不用重启；这次保存只动 `waves` 与 `codes`，题面、反向标记、计分键原样保留。
-
-改波次不是改版本：如果中文版换了，改的是 `version`（校验会报版本漂移）；如果指导语或时间框架不同（此刻 vs 过去一周），那是两个量表，应拆成两个 id，像 `PANAS_NA_NOW` 与 `PANAS_NA_WEEK`。
-
-## 安装
-
-源码在 `D:\dsh-plugins\scale-desk`，按 bundle 装进 desktop profile（`plugin_manager` 的 `install_bundle`，target 为绝对目录）。配置写在插件自己的 `cordis.patch.yml`：
-
-```yaml
-- id: scale-desk
-  name: '@local/scale-desk'
-  config:
-    projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文'
-    labDir: 'D:/yyh-lab'
-```
-
-`labDir` 默认 `<projectRoot>/_lab`，本机配成 `D:/yyh-lab`（`_lab` 不放在 OneDrive 里，避免同步把新文件回退）；`scalesDir` 默认 `<labDir>/scales`；`subjectsPath` 默认 `<labDir>/subjects.csv`（有就用来列出「已入组但还没量表」的人，没有就只列已录过量表的人）。`pythonPath` 默认指向 DSH 自带的 Python，用于把 `.xlsx` 转成表格（需要 openpyxl）；换运行环境时在 config 里覆盖它。
-
-改 Host 代码要重启 app；改 client 在「设置 → 插件」里把本插件关掉再打开，然后刷新页面。
-
-## 测试
+## 验证
 
 ```powershell
-node --test tests/scoring.test.mjs   # 31 项：定义、反向、折算、乘数、题型与选项、列名、重复编号、粘贴解析、导入映射（含 QuestionPro 表头）、校验、CSV
-node tests/smoke.mjs                 # 临时目录跑完整链路：播种 25 份问卷与流程 → 导入 → 手填（含文本题）→ 重复/改号/删行 → 建库/改库/删库 → 计分 → 导出（含宽表）→ 工具 → 题面 → 波次
+npm test
+npm run test:host
 ```
+
+全部测试仅使用临时虚构研究。测试真实客户端事件构造、Host路由、研究切换、纯查询不写盘、映射、编号、定义追溯、派生manifest和并发冲突。

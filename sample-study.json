@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "studyId": "fictional-garden-study",
+  "name": "虚构花园体验示例",
+  "dataRoot": "./garden-data",
+  "participantId": { "pattern": "", "description": "任意非空字符串" },
+  "participants": { "path": "./participants.csv", "idColumn": "participantId" },
+  "visits": [
+    { "id": "baseline", "label": "初次体验", "order": 0 },
+    { "id": "followup", "label": "再次体验", "order": 1 }
+  ],
+  "tasks": [{ "id": "garden", "label": "虚构体验问卷", "required": true, "visits": ["baseline", "followup"] }],
+  "followups": [],
+  "plugins": { "scales": {} }
+}

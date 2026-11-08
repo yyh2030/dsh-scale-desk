@@ -11,20 +11,9 @@
  */
 
 const DEFAULT_DECIMALS = 2
-const WAVE_ORDER = ['T0', 'T1', 'T2', 'imagery', 'meta', 'post', 'end', 'week']
-
-export const WAVE_LABEL = {
-  T0: 'T0 基线',
-  T1: 'T1 诱导后',
-  T2: 'T2 干预后',
-  imagery: '想象后',
-  meta: 'AI 决策后',
-  post: '事后问卷',
-  end: '结束',
-  week: '一周追踪'
-}
-
-export const WAVE_SHORT = { T0: 'T0', T1: 'T1', T2: 'T2', imagery: '想象后', meta: '决策后', post: '事后', end: '结束', week: 'week' }
+const WAVE_ORDER = []
+export const WAVE_LABEL = {}
+export const WAVE_SHORT = {}
 
 /* ------------------------------------------------------------------ *
  * csv
@@ -117,15 +106,16 @@ export function normalizeCode(value) {
 }
 
 export function normalizeId(value) {
-  const text = String(value === null || value === undefined ? '' : value).trim().replace(/^["']|["']$/g, '')
-  // Excel hands numeric ids back as 11002.0
-  const numeric = /^(\d+)\.0+$/.exec(text)
-  return numeric ? numeric[1] : text
+  let text = String(value === null || value === undefined ? '' : value).trim()
+  // Excel/QuestionPro 常把编号存成数字再导出成 "11002.0"：去掉无意义的小数零，
+  // 否则同一个 11002 会被当成两个不同编号（一个合格、一个被跳过）。
+  if (/^\d+\.0+$/.test(text)) text = text.replace(/\.0+$/, '')
+  return text
 }
 
-/** A subject id in this study is five digits, two of which encode the cell. */
+/** Participant identifiers are opaque, non-empty strings. */
 export function isValidId(value) {
-  return /^[12][12]\d{3}$/.test(String(value || '').trim())
+  return normalizeId(value).length > 0
 }
 
 export function waveSort(a, b) {
@@ -263,7 +253,9 @@ export function normalizeDef(raw, fallbackId) {
   const missing = src.missing && typeof src.missing === 'object' ? src.missing : {}
   def.missing = {
     rule: missing.rule === 'strict' ? 'strict' : 'prorate',
-    minAnswered: Math.max(1, Math.round(num(missing.minAnswered, Math.ceil(count * 0.8))))
+    minAnswered: Math.max(1, Math.round(num(missing.minAnswered, Math.ceil(count * (missing.minProportion ?? 0.8))))),
+    minProportion: Number.isFinite(missing.minProportion) ? missing.minProportion : null,
+    codes: Array.isArray(missing.codes) ? missing.codes.map(String) : null
   }
 
   def.waves = Array.isArray(src.waves) && src.waves.length
@@ -286,15 +278,59 @@ export function theoreticalRange(def, sub) {
   if (!items.length) return null
   // Reversal flips a value but not the bounds. A mean stays on the response
   // scale; a sum grows with the number of items and the multiplier.
-  const count = items.length
-  const span = def.scoring.type === 'mean' ? 1 : count
-  const low = span * def.response.min * sub.multiplier
-  const high = span * def.response.max * sub.multiplier
+  const bounds = items.map(no => def.items.find(item => item.no === no)).map(item => [item?.kind === 'number' && Number.isFinite(item.min) ? item.min : def.response.min, item?.kind === 'number' && Number.isFinite(item.max) ? item.max : def.response.max])
+  const divisor = def.scoring.type === 'mean' ? items.length : 1
+  const low = bounds.reduce((sum, range) => sum + range[0], 0) / divisor * sub.multiplier
+  const high = bounds.reduce((sum, range) => sum + range[1], 0) / divisor * sub.multiplier
   return [roundTo(low, def.decimals), roundTo(high, def.decimals)]
 }
 
 function issue(level, scope, text, extra = {}) {
   return { level, scope, text, ...extra }
+}
+
+/** Validate source JSON before any normalization can hide errors. */
+export function validateRawDefinition(raw) {
+  const problems = []
+  const bad = text => problems.push(issue('bad', 'definition', text))
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [issue('bad', 'definition', '定义必须是JSON对象')]
+  if (raw.schema !== 1) bad('定义schema必须为1')
+  if (!/^[A-Za-z][A-Za-z0-9_-]{1,63}$/.test(raw.id || '')) bad('量表id不是安全的文件名标识')
+  if (!Number.isInteger(raw.itemCount) || raw.itemCount < 1 || raw.itemCount > 1000) bad('itemCount需为1–1000整数')
+  if (!raw.response || typeof raw.response !== 'object' || !Number.isFinite(raw.response.min) || !Number.isFinite(raw.response.max) || raw.response.min >= raw.response.max) bad('response需有有限数值min/max且下限小于上限')
+  if (raw.decimals !== undefined && (!Number.isInteger(raw.decimals) || raw.decimals < 0 || raw.decimals > 10)) bad('decimals需为0–10整数')
+  if (raw.missing?.rule !== undefined && !['strict','prorate'].includes(raw.missing.rule)) bad('missing.rule只能为strict/prorate')
+  if (raw.missing?.minAnswered !== undefined && (!Number.isInteger(raw.missing.minAnswered) || raw.missing.minAnswered < 1 || raw.missing.minAnswered > raw.itemCount)) bad('missing.minAnswered超出题量')
+  if (!Array.isArray(raw.items)) bad('items需为数组')
+  const seen = new Set()
+  for (const item of Array.isArray(raw.items) ? raw.items : []) {
+    if (!item || !Number.isInteger(item.no) || item.no < 1 || item.no > raw.itemCount) { bad('题号超出声明itemCount'); continue }
+    if (seen.has(item.no)) bad('题号重复：' + item.no)
+    seen.add(item.no)
+    if (item.kind !== undefined && !ITEM_KINDS.has(item.kind)) bad('未知题型：' + item.kind)
+    if (item.reverse !== undefined && typeof item.reverse !== 'boolean') bad('reverse需为boolean：' + item.no)
+    for (const bound of ['min','max']) if (item[bound] !== undefined && item[bound] !== null && !Number.isFinite(item[bound])) bad('题目范围需为有限数字：' + item.no)
+    if (item.kind === 'number' && Number.isFinite(item.min) && Number.isFinite(item.max) && item.min > item.max) bad('题目范围下限大于上限：' + item.no)
+  }
+  if (Number.isInteger(raw.itemCount)) for (let no = 1; no <= raw.itemCount; no++) if (!seen.has(no)) bad('缺少题号：' + no)
+  if (!Array.isArray(raw.waves) || !raw.waves.length || raw.waves.some(wave => !/^[A-Za-z0-9._-]{1,24}$/.test(wave))) bad('waves需含安全的波次标识')
+  if (Array.isArray(raw.waves) && new Set(raw.waves).size !== raw.waves.length) bad('波次重复')
+  if (!['sum','mean','none'].includes(raw.scoring?.type)) bad('未知计分方式')
+  if (raw.scoring?.type !== 'none' && (!raw.scoring?.subscales || typeof raw.scoring.subscales !== 'object' || !Object.keys(raw.scoring.subscales).length)) bad('计分量表需有非空subscales')
+  for (const sub of Object.values(raw.scoring?.subscales || {})) {
+    if (!sub || typeof sub !== 'object') { bad('分量表需为对象'); continue }
+    if (!Array.isArray(sub.items) || !sub.items.length || sub.items.some(no => !seen.has(no)) || new Set(sub.items).size !== sub.items.length) bad('分量表题号无效或重复')
+    if (sub.multiplier !== undefined && !Number.isFinite(sub.multiplier)) bad('multiplier需为有限数字')
+    if (sub.minAnswered !== undefined && sub.minAnswered !== null && (!Number.isInteger(sub.minAnswered) || sub.minAnswered < 1 || sub.minAnswered > (sub.items || []).length)) bad('分量表minAnswered超出题量')
+    if (sub.reverse !== undefined && !Array.isArray(sub.reverse)) { bad('分量表reverse需为数组'); continue }
+    if (sub.range !== undefined && sub.range !== null && (!Array.isArray(sub.range) || sub.range.length !== 2 || sub.range.some(value => !Number.isFinite(value)) || sub.range[0] > sub.range[1])) bad('分量表range需为两个有限数字')
+    for (const no of sub.reverse || []) {
+      const item = raw.items?.find(item => item.no === no)
+      if (!item || item.reverse === false || !(sub.items || []).includes(no)) bad('反向题与逐题标记冲突：' + no)
+    }
+  }
+  if (raw.missing?.minProportion !== undefined && (!Number.isFinite(raw.missing.minProportion) || !(raw.missing.minProportion > 0) || raw.missing.minProportion > 1)) bad('minProportion需大于0且不超过1')
+  return problems
 }
 
 /** Definition problems: they must be fixed before any score is trusted. */
@@ -476,7 +512,6 @@ const MISSING_TOKENS = new Set(['na', 'n/a', 'na.', 'null', 'nil', 'none', '-', 
 export function parseValue(def, raw, item) {
   const text = raw === null || raw === undefined ? '' : String(raw).trim()
   if (!text) return { value: null, reason: 'empty' }
-  if (MISSING_TOKENS.has(text.toLowerCase())) return { value: null, reason: 'empty' }
 
   const kind = item && item.kind ? item.kind : 'likert'
   if (kind === 'text') {
@@ -499,15 +534,18 @@ export function parseValue(def, raw, item) {
     if (parts.length && parts.every(part => allowed.has(simplify(part)))) {
       return { value: kind === 'multi' ? parts.map(simplify).join(',') : simplify(parts[0]) }
     }
+    if ((def.missing.codes || [...MISSING_TOKENS]).map(value => value.toLowerCase()).includes(text.toLowerCase())) return { value: null, reason: 'empty' }
     return { value: null, reason: 'unparsed', raw: text }
   }
 
+  if ((def.missing.codes || [...MISSING_TOKENS]).map(value => value.toLowerCase()).includes(text.toLowerCase())) return { value: null, reason: 'empty' }
   // number / likert: a bounded numeric answer
   const min = kind === 'number' && item && Number.isFinite(item.min) ? item.min : def.response.min
   const max = kind === 'number' && item && Number.isFinite(item.max) ? item.max : def.response.max
   const numeric = Number(text.replace(/[，,]/g, ''))
   if (Number.isFinite(numeric)) {
     if (numeric < min || numeric > max) return { value: null, reason: 'range', raw: text, min, max }
+    if (kind === 'likert' && !Number.isInteger(numeric)) return { value: null, reason: 'unparsed', raw: text }
     return { value: numeric }
   }
   const byLabel = labelLookup(def).get(normalizeCode(text))
@@ -515,9 +553,11 @@ export function parseValue(def, raw, item) {
   return { value: null, reason: 'unparsed', raw: text }
 }
 
-export function scoredValue(def, value, reverse) {
+export function scoredValue(def, value, reverse, item) {
   if (!Number.isFinite(value)) return null
-  return reverse ? def.response.min + def.response.max - value : value
+  const min = item?.kind === 'number' && Number.isFinite(item.min) ? item.min : def.response.min
+  const max = item?.kind === 'number' && Number.isFinite(item.max) ? item.max : def.response.max
+  return reverse ? min + max - value : value
 }
 
 function computeSubscale(def, sub, scoredByNo) {
@@ -526,7 +566,7 @@ function computeSubscale(def, sub, scoredByNo) {
   const answered = items.filter(no => Number.isFinite(scoredByNo.get(no)))
   const a = answered.length
   const sum = answered.reduce((total, no) => total + scoredByNo.get(no), 0)
-  const minAnswered = Math.min(sub.minAnswered === null || sub.minAnswered === undefined ? def.missing.minAnswered : sub.minAnswered, n)
+  const minAnswered = Math.min(sub.minAnswered === null || sub.minAnswered === undefined ? (def.missing.minProportion !== null ? Math.ceil(n * def.missing.minProportion) : Math.ceil(n * def.missing.minAnswered / Math.max(1, def.itemCount))) : sub.minAnswered, n)
   let score = null
   let status = 'empty'
   if (a > 0) {
@@ -551,7 +591,7 @@ export function scoreAnswers(def, values = {}) {
   const items = def.items.map(item => {
     const raw = values[item.no]
     const parsed = parseValue(def, raw, item)
-    const scored = Number.isFinite(parsed.value) ? scoredValue(def, parsed.value, item.reverse) : null
+    const scored = Number.isFinite(parsed.value) ? scoredValue(def, parsed.value, item.reverse, item) : null
     if (Number.isFinite(scored)) scoredByNo.set(item.no, scored)
     return {
       no: item.no,
@@ -668,14 +708,18 @@ export function buildScores(defs, answerRows, subjectIds = []) {
 /** Item-level rows for scores_detail.csv and the panel's per-subject drill-down. */
 export function buildDetail(defs, answerRows) {
   const out = []
+  const index = indexAnswers(answerRows)
   const sorted = [...(answerRows || [])].sort((a, b) => a.id.localeCompare(b.id) || a.scale.localeCompare(b.scale) || waveSort(a.wave, b.wave))
   for (const row of sorted) {
     const def = defs.find(item => item.id === row.scale)
     if (!def) continue
     const result = scoreAnswers(def, row.values)
+    const duplicate = (index.get(answerKey(row.scale, row.wave))?.get(row.id) || []).length > 1
     for (const item of result.items) {
       out.push({
         id: row.id,
+        definitionHash: row.definitionHash || '',
+        submissionId: row.submissionId || '',
         scale: def.id,
         wave: row.wave,
         no: item.no,
@@ -683,8 +727,8 @@ export function buildDetail(defs, answerRows) {
         reverse: item.reverse ? 'reverse' : '',
         raw: item.raw,
         value: item.value,
-        scored: item.scored,
-        note: item.reason || ''
+        scored: duplicate ? null : item.scored,
+        note: duplicate ? 'duplicate' : item.reason || ''
       })
     }
   }
@@ -704,8 +748,8 @@ export function scoresCsv(defs, scores) {
 }
 
 export function detailCsv(detailRows) {
-  const header = ['编号', '量表', '波次', '题号', '导出码', '反向', '原始值', '计分值', '备注']
-  const rows = detailRows.map(row => [row.id, row.scale, row.wave, row.no, row.code, row.reverse, row.raw, row.scored, row.note])
+  const header = ['编号', '量表', '波次', '题号', '导出码', '反向', '原始值', '计分值', '备注', 'definitionHash', 'submissionId']
+  const rows = detailRows.map(row => [row.id, row.scale, row.wave, row.no, row.code, row.reverse, row.raw, row.scored, row.note, row.definitionHash, row.submissionId])
   return toCsv([header, ...rows])
 }
 
@@ -776,7 +820,7 @@ function findIdColumn(header, rows) {
   if (Array.isArray(rows) && rows.length) {
     for (let i = 0; i < header.length; i += 1) {
       const values = rows.map(row => String(row[i] ?? '').trim()).filter(Boolean)
-      if (values.length && values.length >= Math.ceil(rows.length * 0.8) && values.every(value => isValidId(value))) {
+      if (values.length && values.length >= Math.ceil(rows.length * 0.8) && values.every(value => /^[12][12]\d{3}$/.test(value))) {
         return { column: header[i], index: i, how: 'values' }
       }
     }
@@ -786,7 +830,7 @@ function findIdColumn(header, rows) {
 
 /**
  * QuestionPro puts the question code in brackets and repeats it for every row
- * of a matrix: `[t1_ftps] 1. …`, `[t1_ftps] 2. …`. Extract that code; fall back
+ * of a matrix: `[t1_garden] 1. …`, `[t1_garden] 2. …`. Extract that code; fall back
  * to the header text itself.
  */
 export function headerCode(name) {
@@ -859,7 +903,7 @@ function itemColumnCandidates(def, wave, header, taken = new Set(), labels = [],
     if (code) {
       const key = normalizeCode(code)
       // 1. exact bracket code (may repeat for every row of a matrix);
-      // 2. a per-item code such as `t1_ftps_03` against a `[t1_ftps]` group;
+      // 2. a per-item code such as `t1_garden_03` against a `[t1_garden]` group;
       // 3. a header that merely contains the code.
       let candidates = groups.get(key) || []
       if (!candidates.length) {
@@ -962,10 +1006,7 @@ export function mapImportColumns(def, wave, header, rows, labels = [], allowOrde
   // participant number and the drinking-frequency item, so item mapping must
   // not steal the id column.
   const taken = new Set()
-  if (id.column) {
-    const at = names.indexOf(id.column)
-    if (at >= 0) taken.add(at)
-  }
+  if (id.index >= 0) taken.add(id.index)
   const { items, claimed } = itemColumnCandidates(def, wave, names, taken, labels, allowOrder, allowText)
   const extras = names.filter((name, at) => !claimed.has(at))
   const unmatched = items.filter(item => !item.column).map(item => item.no)
@@ -1005,17 +1046,27 @@ export function scanTargets(defs, header, rows, labels = []) {
         matched: mapping.matched,
         total: mapping.total,
         codeHits,
+        automatic: mapping.items.filter(item => item.how === 'code' && !/^(?:q|item|no)?\d+$/i.test(item.code)).length >= threshold,
         mapping
       })
     }
   }
-  // When a survey's own code names one wave (`t1_ftps`), a text-only match on
-  // another wave (`t0_ftps` shares the item texts) is noise: keep the coded one.
+  // When a survey's own code names one wave (`t1_garden`), a text-only match on
+  // another wave (`t0_garden` shares the item texts) is noise: keep the coded one.
   const bestHits = new Map()
   for (const target of targets) {
     bestHits.set(target.scale, Math.max(bestHits.get(target.scale) || 0, target.codeHits))
   }
   const filtered = targets.filter(target => (bestHits.get(target.scale) || 0) === 0 || target.codeHits > 0)
+  // The same physical item columns cannot be assigned automatically twice.
+  const owners = new Map()
+  for (const target of filtered.filter(target => target.automatic)) {
+    for (const item of target.mapping.items.filter(item => item.index >= 0)) {
+      if (!owners.has(item.index)) owners.set(item.index, [])
+      owners.get(item.index).push(target)
+    }
+  }
+  for (const targets of owners.values()) if (targets.length > 1) for (const target of targets) target.automatic = false
   return filtered.sort((a, b) => (b.codeHits - a.codeHits) || (b.matched / b.total - a.matched / a.total))
 }
 
@@ -1114,21 +1165,8 @@ export function applyImport(def, wave, table, mapping) {
   if (!table || !table.length) return { rows: [], issues: [], header: [] }
   const header = table[0].map(name => String(name ?? '').trim())
   const body = table.slice(1)
-  // Column names repeat in a QuestionPro matrix export, so positions are the
-  // only reliable key; fall back to consuming name matches in item order.
-  const byName = new Map()
-  header.forEach((name, at) => {
-    if (!byName.has(name)) byName.set(name, [])
-    byName.get(name).push(at)
-  })
-  const columns = new Map()
-  for (const item of mapping.items) {
-    if (!item.column) continue
-    const at = Number.isInteger(item.index) && item.index >= 0
-      ? item.index
-      : (byName.get(item.column) || []).shift()
-    if (Number.isInteger(at)) columns.set(item.no, at)
-  }
+  mapping = confirmImportMapping(def, header, mapping)
+  const columns = new Map(mapping.items.filter(item => item.index >= 0).map(item => [item.no, item.index]))
   const rows = []
   const issues = []
   const seen = new Map()
@@ -1142,9 +1180,7 @@ export function applyImport(def, wave, table, mapping) {
       issues.push(issue('bad', 'import', `第 ${line} 行没有编号，已跳过`, { line }))
       return
     }
-    if (!isValidId(id)) {
-      issues.push(issue('warn', 'import', `第 ${line} 行编号「${id}」不是 5 位分组编号，仍然导入`, { line, id }))
-    }
+
     const values = {}
     for (const [no, at] of columns.entries()) {
       values[no] = String(cells[at] ?? '').trim()
@@ -1202,6 +1238,8 @@ export function validateData(defs, answerFiles, scores, provenance = []) {
       if (!isValidId(row.id)) {
         list.push(issue('warn', 'data', `${def.short} ${file.wave} 编号「${row.id}」格式可疑`, { scale: def.id, wave: file.wave, id: row.id }))
       }
+      if (!row.definitionHash) list.push(issue('warn', 'data', `${def.short} ${file.wave} ${row.id} 没有definitionHash，无法追溯旧定义`, { scale: def.id, wave: file.wave, id: row.id }))
+      else if (def.definitionHash && row.definitionHash !== def.definitionHash) list.push(issue('warn', 'data', `${def.short} ${file.wave} ${row.id} 按旧定义 ${row.definitionHash} 录入；当前 ${def.definitionHash}`, { scale: def.id, wave: file.wave, id: row.id }))
       const result = scoreAnswers(def, row.values)
       const bad = result.invalid
       if (bad.length) {
@@ -1238,10 +1276,9 @@ export function validateData(defs, answerFiles, scores, provenance = []) {
 
   // Subjects that answered one scale but not another, per wave.
   const byWave = new Map()
-  for (const row of answerFiles || []) {
-    const key = row.wave
-    if (!byWave.has(key)) byWave.set(key, new Map())
-    byWave.get(key).set(row.id, true)
+  for (const file of answerFiles || []) {
+    if (!byWave.has(file.wave)) byWave.set(file.wave, new Map())
+    for (const row of file.rows || []) if (isValidId(row.id)) byWave.get(file.wave).set(row.id, true)
   }
   for (const def of defs) {
     for (const wave of def.waves) {
@@ -1307,4 +1344,45 @@ export function subjectScoreText(def, wave, row, result) {
   const reversed = result.items.filter(item => item.reverse && Number.isFinite(item.scored))
   if (reversed.length) lines.push(`- 反向题：${reversed.map(item => `${item.no}(${item.raw}→${item.scored})`).join('、')}`)
   return lines.join('\n')
+}
+
+/** Canonicalize and validate positions; labels are display-only. */
+export function confirmImportMapping(def, header, base, overrides) {
+  const invalid = message => Object.assign(new Error(message), { code: 'invalid_mapping' })
+  const mapping = { ...base, items: base.items.map(item => ({ ...item })) }
+  const position = (entry, key, labelKey, fallback) => {
+    if (entry && Object.hasOwn(entry, key)) {
+      const value = entry[key]
+      if (!Number.isInteger(value) || value < -1 || value >= header.length) throw invalid('列索引超出范围')
+      return value
+    }
+    if (entry && Object.hasOwn(entry, labelKey)) {
+      const name = entry[labelKey]
+      if (!name) return -1
+      const matches = header.map((label, at) => label === name ? at : -1).filter(at => at >= 0)
+      if (matches.length !== 1) throw invalid('列名不存在或重复，请使用列索引')
+      return matches[0]
+    }
+    return fallback
+  }
+  mapping.idIndex = position(overrides, 'idIndex', 'idColumn', position(base, 'idIndex', 'idColumn', -1))
+  if (mapping.idIndex < 0) throw invalid('请选择编号列')
+  mapping.idColumn = header[mapping.idIndex]
+  const changes = new Map()
+  for (const item of overrides?.items || []) {
+    if (!def.items.some(candidate => candidate.no === item.no) || changes.has(item.no)) throw invalid('题号不存在或重复')
+    changes.set(item.no, item)
+  }
+  const taken = new Set([mapping.idIndex])
+  mapping.items = mapping.items.map(item => {
+    const change = changes.get(item.no)
+    const index = position(change, 'index', 'column', position(item, 'index', 'column', -1))
+    if (index >= 0 && taken.has(index)) throw invalid('同一列不能同时作为编号或多道题')
+    if (index >= 0) taken.add(index)
+    return { ...item, index, column: index >= 0 ? header[index] : null, how: change ? 'manual' : item.how }
+  })
+  mapping.matched = mapping.items.filter(item => item.index >= 0).length
+  mapping.unmatched = mapping.items.filter(item => item.index < 0).map(item => item.no)
+  mapping.extraColumns = header.filter((_, at) => !taken.has(at))
+  return mapping
 }

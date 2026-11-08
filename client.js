@@ -15,22 +15,60 @@ window.__ModuleLoader__.load({
 
     const API = '/api/scale-desk'
     const ALL = '__all__'
+    let activeRevision = null
+    let activeStudyId = null
+    let visitLabels = {}
+
+    /* 页面身份：每个标签页一个 pageId。研究绑定按页面解析，不再读 profile 级唯一研究。 */
+    const PAGE_KEY = 'dsh:research:page:v2'
+    const FOCUS_KEY = 'dsh:research:focus:v1'
+    function randomPageId() { const bytes = new Uint8Array(12); if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes); else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256); return Array.from(bytes, v => v.toString(16).padStart(2, '0')).join('') }
+    function pageId() { try { const own = sessionStorage.getItem(PAGE_KEY); if (own) return own; let shared = localStorage.getItem(PAGE_KEY + ':default'); if (!shared) { shared = randomPageId(); localStorage.setItem(PAGE_KEY + ':default', shared) } return shared } catch { return 'pagemem00000001' } }
+    /** 新页面身份：换一个 pageId，同时丢掉本页旧令牌与冲突标记。 */
+    function newPage() { const fresh = randomPageId(); try { sessionStorage.setItem(PAGE_KEY, fresh); localStorage.setItem(PAGE_KEY + ':default', fresh) } catch { /* 隐私模式 */ } activeBinding = null; staleBinding = false; return fresh }
+    let activeBinding = null
+    let staleBinding = false
+    let staleWatch = null
+
+    const READ_ACTIONS = ['status','refresh','definition','textsPreview','answer','detail','answers','suspicious','importPreview','validate','studyConfig','studyPreview','capabilities']
+    const CONNECT_ACTIONS = ['studyConnect','studySave']
+    const BINDING_ERRORS = ['binding_conflict','binding_required','study_missing']
+    const SOURCE_LABEL = { 'page-connect': '页面连接', 'session-connect': '会话连接', explicit: '已连接', workspace: '工作区记录', project: '工作区项目配置', legacy: '旧配置来源', candidate: '候选研究', empty: '空研究' }
 
     async function call(action, payload, query) {
-      let url = API + '?action=' + encodeURIComponent(action)
+      // 研究已变化时不再静默重试写入：先重新连接，避免把作答写进另一份研究。
+      if (staleBinding && !READ_ACTIONS.includes(action) && !CONNECT_ACTIONS.includes(action)) {
+        const stale = new Error('研究已变化，请重新连接或先导出草稿')
+        stale.code = 'binding_required'
+        throw stale
+      }
+      const page = pageId()
+      let url = API + '?action=' + encodeURIComponent(action) + '&pageId=' + encodeURIComponent(page)
       if (query) {
         const qs = new URLSearchParams(query).toString()
         if (qs) url += '&' + qs
       }
-      const init = { headers: { 'x-scale-desk': '1' } }
+      const init = { headers: { 'x-scale-desk': '1', 'x-dsh-page': page } }
       if (payload !== undefined) {
         init.method = 'POST'
         init.headers['content-type'] = 'application/json'
-        init.body = JSON.stringify({ action, payload })
+        const needsRevision = !READ_ACTIONS.includes(action) && !CONNECT_ACTIONS.includes(action) && activeRevision
+        const submitted = { ...(needsRevision ? { expectedRevision: activeRevision } : {}), studyId: activeStudyId, ...payload, pageId: page, binding: activeBinding }
+        init.body = JSON.stringify({ action, payload: submitted })
       }
       const res = await fetch(url, init)
       const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.ok) throw new Error((json.error && json.error.message) || 'HTTP ' + res.status)
+      if (!res.ok || !json.ok) {
+        const failure = new Error((json.error && json.error.message) || 'HTTP ' + res.status)
+        failure.code = json.error && json.error.code
+        failure.details = json.error && json.error.details
+        if (BINDING_ERRORS.includes(failure.code)) { staleBinding = true; if (staleWatch) staleWatch() }
+        throw failure
+      }
+      if (json.data && json.data.binding && json.data.binding.token) activeBinding = json.data.binding.token
+      if (json.data && json.data.revision) activeRevision = json.data.revision
+      if (json.data && json.data.study) activeStudyId = json.data.study.id
+      if (CONNECT_ACTIONS.includes(action)) staleBinding = false
       return json.data
     }
 
@@ -39,126 +77,243 @@ window.__ModuleLoader__.load({
      * ================================================================ */
 
     const CSS = `
-.sd-root{--sd-bg:var(--dsw-alias-bg-base,#fff);--sd-panel:var(--dsw-alias-bg-layer-1,#f7f7f8);--sd-raised:var(--dsw-alias-bg-layer-2,#f1f2f4);--sd-line:var(--dsw-alias-border-l1,rgba(0,0,0,.09));--sd-line2:var(--dsw-alias-border-l2,rgba(0,0,0,.16));--sd-text:var(--dsw-alias-label-primary,#16181d);--sd-text2:var(--dsw-alias-label-secondary,#5b6068);--sd-brand:var(--dsw-alias-brand-primary,#2f8f83);--sd-ok:var(--dsw-alias-state-success-primary,#148a62);--sd-warn:var(--dsw-alias-state-warn-primary,#b7791f);--sd-bad:var(--dsw-alias-state-error-primary,#c0392b);display:flex;flex-direction:column;height:100%;min-height:0;background:var(--sd-bg);color:var(--sd-text);font-size:13px;line-height:1.55;overflow:hidden}
+/* ================================================================
+ * 设计令牌：暖纸 / 陶土 / 全衬线
+ * 纸面 #f5f4ef · 下沉 #eeede6 · 面板 #fbfaf6 · 抬起 #fffefb
+ * 线 #e3dfd4 / #eceade / #cdc7b7 · 字 #24221f / #5b564d / #726c62
+ * 陶土 #c46e4f（装饰）· #a55a3c（主操作）· #8b4526（hover）
+ * ================================================================ */
+.sd-root{--sd-bg:#f5f4ef;--sd-sunk:#eeede6;--sd-panel:#fbfaf6;--sd-raised:#fffefb;--sd-alt:#f2f0e9;--sd-line:#e3dfd4;--sd-line-soft:#eceade;--sd-line2:#cdc7b7;--sd-text:#24221f;--sd-text2:#5b564d;--sd-text3:#726c62;--sd-brand:#a55a3c;--sd-accent:#c46e4f;--sd-accent-deep:#8b4526;--sd-accent-soft:#f4e5dd;--sd-on-accent:#fdfbf7;--sd-ok:#3f6b4f;--sd-ok-soft:#e4ebe1;--sd-warn:#7d5810;--sd-warn-soft:#f3ead3;--sd-bad:#9b3a2c;--sd-bad-soft:#f4dfd9;--sd-info:#3f5a70;--sd-info-soft:#e2e8ec;display:flex;flex-direction:column;height:100%;min-height:0;background:var(--sd-bg);color:var(--sd-text);font-family:Cambria,"Noto Serif SC","Source Han Serif SC","Songti SC",STSong,SimSun,serif;font-size:15px;line-height:1.62;letter-spacing:0;font-variant-numeric:tabular-nums;overflow:hidden}
 .sd-root *{box-sizing:border-box}
-.sd-top{display:flex;align-items:center;gap:12px;height:56px;padding:0 16px;border-bottom:1px solid var(--sd-line);flex:none;flex-wrap:nowrap;min-width:0}
-.sd-brand{display:flex;align-items:baseline;gap:8px;min-width:0;flex:none}
-.sd-brand strong{font-size:14px;font-weight:650;white-space:nowrap}
-.sd-brand span{font-size:11.5px;color:var(--sd-text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42ch}
-.sd-stats{display:flex;gap:14px;align-items:center;margin-left:6px;min-width:0;overflow:hidden}
-.sd-stat{display:flex;flex-direction:column;line-height:1.2;white-space:nowrap}
-.sd-stat b{font-size:13px;font-variant-numeric:tabular-nums;font-weight:650}
-.sd-stat span{font-size:10px;color:var(--sd-text2)}
+.sd-root code,.sd-root kbd,.sd-root pre,.sd-root samp{font-family:inherit}
+
+/* ---- 顶栏：产品名 + 研究名 + 四个统计 + 刷新/导出 ---- */
+.sd-top{display:flex;align-items:center;gap:20px;height:60px;padding:0 20px;border-bottom:1px solid var(--sd-line);background:var(--sd-panel);flex:none;min-width:0}
+.sd-brand{display:flex;align-items:baseline;gap:10px;min-width:0;flex:0 1 auto}
+.sd-brand strong{font-size:21px;font-weight:600;line-height:1.24;white-space:nowrap}
+.sd-brand span{font-size:13.5px;color:var(--sd-text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:20ch}
+.sd-stats{display:flex;align-items:flex-end;gap:24px;min-width:0;overflow:hidden;margin-left:16px}
+.sd-stat{display:flex;flex-direction:column-reverse;line-height:1.15;white-space:nowrap}
+.sd-stat b{font-size:17px;font-weight:600;line-height:1.15;font-variant-numeric:tabular-nums}
+.sd-stat span{font-size:12.5px;line-height:1.3;color:var(--sd-text3);margin-bottom:3px}
 .sd-stat.is-bad b{color:var(--sd-bad)}
 .sd-stat.is-warn b{color:var(--sd-warn)}
-.sd-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
-.sd-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:8px;border:1px solid transparent;font-size:12.5px;cursor:pointer;white-space:nowrap;background:transparent;color:var(--sd-text);font-family:inherit}
-.sd-btn:disabled{opacity:.55;cursor:default}
-.sd-btn-primary{background:var(--sd-brand);color:#fff}
-.sd-btn-primary:hover:not(:disabled){filter:brightness(1.06)}
-.sd-btn-outline{background:var(--sd-bg);border-color:var(--sd-line2)}
-.sd-btn-outline:hover:not(:disabled){background:var(--sd-raised)}
-.sd-btn-ghost{color:var(--sd-text2)}
-.sd-btn-ghost:hover:not(:disabled){background:var(--sd-raised);color:var(--sd-text)}
-.sd-btn-sm{height:24px;padding:0 9px;font-size:11.5px;border-radius:6px}
-.sd-tabs{display:flex;align-items:center;gap:2px;margin:10px 16px 0;padding:3px;border-radius:9px;background:var(--sd-raised);border:1px solid var(--sd-line);width:max-content;flex:none}
-.sd-tab{border:0;background:transparent;color:var(--sd-text2);padding:4px 14px;border-radius:7px;cursor:pointer;font-size:12.5px;white-space:nowrap;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
-.sd-tab.is-active{background:var(--sd-bg);color:var(--sd-text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
-.sd-tab b{font-size:10.5px;font-weight:600;color:var(--sd-text2);font-variant-numeric:tabular-nums}
-.sd-scroll{flex:1;min-height:0;overflow:auto;padding:12px 16px 40px}
-.sd-card{border:1px solid var(--sd-line);border-radius:12px;background:var(--sd-panel);padding:13px 14px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.sd-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.sd-card-head h3{margin:0;font-size:13px;font-weight:650}
+.sd-actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+
+/* ---- 按钮：一个陶土主操作，其余米白 + 细边 ---- */
+.sd-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 13px;border-radius:5px;border:1px solid transparent;background:transparent;color:var(--sd-text);font-family:inherit;font-size:15px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;transition:background-color .14s ease,border-color .14s ease,color .14s ease}
+.sd-btn:disabled{background:var(--sd-alt);border-color:var(--sd-line);color:var(--sd-text3);cursor:not-allowed}
+.sd-btn-primary{background:var(--sd-brand);border-color:var(--sd-brand);color:var(--sd-on-accent)}
+.sd-btn-primary:hover:not(:disabled){background:var(--sd-accent-deep);border-color:var(--sd-accent-deep)}
+.sd-btn-primary:active:not(:disabled){background:var(--sd-accent-deep)}
+.sd-btn-primary:disabled{background:var(--sd-sunk);border-color:var(--sd-line);color:var(--sd-text3)}
+.sd-btn-outline{background:var(--sd-raised);border-color:var(--sd-line2);color:var(--sd-text)}
+.sd-btn-outline:hover:not(:disabled){background:var(--sd-alt);border-color:var(--sd-text3)}
+.sd-btn-ghost{border-color:transparent;color:var(--sd-text2)}
+.sd-btn-ghost:hover:not(:disabled){background:var(--sd-alt);color:var(--sd-text)}
+.sd-btn-sm{height:30px;padding:0 11px;font-size:13.5px;border-radius:5px}
+.sd-root button:focus-visible,.sd-root summary:focus-visible,.sd-root input[type=checkbox]:focus-visible{outline:2px solid var(--sd-accent-strong,var(--sd-brand));outline-offset:2px}
+
+/* ---- 页签：字重 + 2px 下划线，不做整块胶囊 ---- */
+.sd-tabs{display:flex;align-items:flex-end;gap:22px;margin:0 20px;border-bottom:1px solid var(--sd-line);flex:none;width:auto;overflow-x:auto;scrollbar-width:none}
+.sd-tabs::-webkit-scrollbar{display:none}
+.sd-tab{border:0;background:none;border-bottom:2px solid transparent;margin-bottom:-1px;padding:11px 2px 9px;color:var(--sd-text3);font-family:inherit;font-size:15px;line-height:1.3;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:color .14s ease}
+.sd-tab:hover{color:var(--sd-text)}
+.sd-tab.is-active{color:var(--sd-text);font-weight:600;border-bottom-color:var(--sd-brand)}
+.sd-tab b{font-size:12px;font-weight:600;color:var(--sd-text3);font-variant-numeric:tabular-nums}
+.sd-tab.is-active b{color:var(--sd-text2)}
+
+/* ---- 内容面 ---- */
+.sd-scroll{flex:1;min-height:0;overflow:auto;padding:18px 20px 48px;display:flex;flex-direction:column;gap:14px}
+.sd-card{border:1px solid var(--sd-line);border-radius:7px;background:var(--sd-panel);padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.sd-card p{margin:0}
+.sd-card-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.sd-card-head h3{margin:0;font-size:17px;font-weight:600;line-height:1.3;color:var(--sd-text)}
 .sd-card-head .sd-note{margin-left:auto}
-.sd-note{font-size:11.5px;color:var(--sd-text2)}
-.sd-mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px}
-.sd-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(232px,1fr))}
-.sd-lib{border:1px solid var(--sd-line);border-radius:11px;background:var(--sd-bg);padding:11px 12px;display:flex;flex-direction:column;gap:6px;cursor:pointer;text-align:left;min-width:0;font-family:inherit;color:var(--sd-text);transition:border-color .14s ease}
+.sd-note{font-size:13.5px;line-height:1.62;color:var(--sd-text3)}
+.sd-mono{display:inline-block;max-width:100%;padding:1px 6px;border:1px solid var(--sd-line-soft);border-radius:3px;background:var(--sd-sunk);color:var(--sd-text2);font-family:inherit;font-size:13px;line-height:1.8;letter-spacing:.012em;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.sd-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(236px,1fr))}
+
+/* ---- 量表库卡片 ---- */
+.sd-lib{border:1px solid var(--sd-line);border-radius:7px;background:var(--sd-raised);padding:13px 14px;display:flex;flex-direction:column;gap:8px;cursor:pointer;text-align:left;min-width:0;font-family:inherit;color:var(--sd-text);transition:border-color .14s ease,background-color .14s ease}
 .sd-lib:hover{border-color:var(--sd-line2)}
-.sd-lib.is-active{border-color:var(--sd-brand);box-shadow:0 0 0 1px color-mix(in oklab,var(--sd-brand) 40%,transparent)}
-.sd-lib-top{display:flex;align-items:baseline;gap:7px}
-.sd-lib-top b{font-size:13px;font-weight:650}
-.sd-lib-top span{font-size:11px;color:var(--sd-text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sd-lib-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--sd-text2)}
-.sd-lib-ver{font-size:10.5px;color:var(--sd-text2);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.sd-chip{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--sd-line);background:var(--sd-raised);font-size:10.5px;color:var(--sd-text2);white-space:nowrap;font-variant-numeric:tabular-nums}
-.sd-chip.is-brand{color:var(--sd-brand);border-color:color-mix(in oklab,var(--sd-brand) 40%,var(--sd-line));background:color-mix(in oklab,var(--sd-brand) 8%,transparent)}
-.sd-badge{display:inline-flex;align-items:center;justify-content:center;height:18px;padding:0 6px;border-radius:5px;font-size:10.5px;font-weight:600;white-space:nowrap}
-.sd-badge-ok{color:var(--sd-ok);background:color-mix(in oklab,var(--sd-ok) 12%,transparent)}
-.sd-badge-warn{color:var(--sd-warn);background:color-mix(in oklab,var(--sd-warn) 14%,transparent)}
-.sd-badge-bad{color:var(--sd-bad);background:color-mix(in oklab,var(--sd-bad) 12%,transparent)}
-.sd-badge-info{color:var(--sd-text2);background:var(--sd-raised)}
-.sd-kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}
-.sd-kv-item{border:1px solid var(--sd-line);border-radius:9px;background:var(--sd-bg);padding:7px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
-.sd-kv-item span{font-size:10.5px;color:var(--sd-text2)}
-.sd-kv-item b{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis}
-.sd-table-wrap{border:1px solid var(--sd-line);border-radius:10px;overflow:auto;background:var(--sd-bg);max-height:62vh}
-.sd-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;min-width:640px}
-.sd-table th{position:sticky;top:0;z-index:1;background:var(--sd-bg);text-align:left;padding:7px 9px;border-bottom:1px solid var(--sd-line2);font-weight:600;white-space:nowrap;font-size:10.5px;color:var(--sd-text2)}
-.sd-table td{padding:5px 9px;border-bottom:1px solid var(--sd-line);white-space:nowrap;vertical-align:middle;font-variant-numeric:tabular-nums}
+.sd-lib.is-active{border-color:var(--sd-brand);background:#f8ece5}
+.sd-lib-top{display:flex;align-items:baseline;gap:8px;min-width:0}
+.sd-lib-top b{font-size:15px;font-weight:600;white-space:nowrap}
+.sd-lib-top span{font-size:13px;color:var(--sd-text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.sd-lib-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--sd-text2)}
+.sd-lib-ver{font-size:12.5px;line-height:1.5;color:var(--sd-text3);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+
+/* ---- 小标签 ---- */
+.sd-chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:4px;border:1px solid var(--sd-line);background:var(--sd-alt);color:var(--sd-text2);font-family:inherit;font-size:12.5px;line-height:1.3;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sd-chip.is-brand{color:var(--sd-brand);border-color:#dcb6a4;background:#f8ece5}
+.sd-root button.sd-chip:hover{background:#ece8dd;border-color:var(--sd-line2);color:var(--sd-text)}
+.sd-root button.sd-chip.is-brand:hover{background:var(--sd-accent-soft);border-color:var(--sd-brand);color:var(--sd-accent-deep)}
+.sd-badge{display:inline-flex;align-items:center;justify-content:center;height:20px;padding:0 7px;border-radius:4px;border:1px solid transparent;font-size:12px;font-weight:600;line-height:1.2;white-space:nowrap}
+.sd-badge-ok{color:var(--sd-ok);background:var(--sd-ok-soft);border-color:#cad8c8}
+.sd-badge-warn{color:var(--sd-warn);background:var(--sd-warn-soft);border-color:#e1d2ab}
+.sd-badge-bad{color:var(--sd-bad);background:var(--sd-bad-soft);border-color:#e0c1b7}
+.sd-badge-info{color:var(--sd-info);background:var(--sd-info-soft);border-color:#cbd6dd}
+
+/* ---- 键值格 ---- */
+.sd-kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px}
+.sd-kv-item{border:1px solid var(--sd-line);border-radius:5px;background:var(--sd-raised);padding:9px 12px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.sd-kv-item span{font-size:12.5px;line-height:1.5;color:var(--sd-text3)}
+.sd-kv-item b{font-size:15px;font-weight:600;line-height:1.4;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- 表格：表内横滚，行高压紧可扫 ---- */
+.sd-table-wrap{border:1px solid var(--sd-line);border-radius:5px;overflow:auto;background:var(--sd-raised);max-height:62vh;max-width:100%}
+.sd-table{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;line-height:1.45;min-width:640px}
+.sd-table th{position:sticky;top:0;z-index:1;background:var(--sd-alt);text-align:left;padding:8px 10px;height:34px;border-bottom:1px solid var(--sd-line2);font-weight:600;white-space:nowrap;font-size:12.5px;line-height:1.3;color:var(--sd-text2)}
+.sd-table thead tr:nth-child(2) th{top:34px;z-index:2}
+.sd-table thead tr:nth-child(1) th{z-index:3}
+.sd-table td{padding:6px 10px;border-bottom:1px solid var(--sd-line-soft);white-space:nowrap;vertical-align:middle;font-variant-numeric:tabular-nums;color:var(--sd-text)}
 .sd-table tbody tr{cursor:pointer}
-.sd-table tbody tr:hover td{background:color-mix(in oklab,var(--sd-raised) 60%,transparent)}
-.sd-table tbody tr.is-open td{background:color-mix(in oklab,var(--sd-brand) 7%,transparent)}
+.sd-table tbody tr:hover td{background:var(--sd-alt)}
+.sd-table tbody tr.is-open td{background:#f8ece5}
 .sd-table th.is-score,.sd-table td.is-score{text-align:right}
-.sd-table th.sd-sticky,.sd-table td.sd-sticky{position:sticky;left:0;background:var(--sd-bg);z-index:2;box-shadow:1px 0 0 var(--sd-line)}
-.sd-table tbody tr:hover td.sd-sticky{background:color-mix(in oklab,var(--sd-raised) 60%,var(--sd-bg))}
-.sd-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px}
-.sd-cell{display:inline-flex;align-items:center;gap:3px;justify-content:flex-end}
-.sd-cell i{font-style:normal;font-size:9.5px;color:var(--sd-warn)}
+.sd-table th.sd-sticky,.sd-table td.sd-sticky{position:sticky;left:0;background:var(--sd-raised);z-index:2;border-right:1px solid var(--sd-line)}
+.sd-table th.sd-sticky{background:var(--sd-alt);z-index:3}
+.sd-table tbody tr:hover td.sd-sticky{background:var(--sd-alt)}
+.sd-table tbody tr.is-open td.sd-sticky{background:#f8ece5}
+.sd-table .sd-note{font-size:13px}
+.sd-table td .sd-note{white-space:normal}
+.sd-table .sd-mono{font-size:12.5px;padding:0 4px}
+.sd-id{font-family:inherit;font-size:13px;font-weight:500;letter-spacing:.012em}
+.sd-cell{display:inline-flex;align-items:center;gap:4px;justify-content:flex-end}
+.sd-cell i{font-style:normal;font-size:11px;font-weight:600;color:var(--sd-warn)}
 .sd-cell.is-bad{color:var(--sd-bad)}
-.sd-cell.is-empty{color:var(--sd-text2);opacity:.55}
-.sd-field{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.sd-field label{font-size:11.5px;color:var(--sd-text2);white-space:nowrap}
-.sd-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px 12px}
-.sd-form-grid label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--sd-text2)}
-.sd-input,.sd-select{height:30px;padding:0 9px;border:1px solid var(--sd-line);border-radius:7px;background:var(--sd-bg);color:var(--sd-text);font-size:12.5px;outline:none;font-family:inherit;min-width:0}
-.sd-input:focus,.sd-select:focus{border-color:var(--sd-brand)}
-.sd-input.sd-id-input{width:88px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-.sd-text-input{flex:1;min-width:0;height:26px;padding:0 7px;border:1px solid var(--sd-line);border-radius:6px;background:var(--sd-bg);color:var(--sd-text);font-size:11.5px;font-family:inherit;outline:none}
-.sd-text-input:focus{border-color:var(--sd-brand)}
+.sd-cell.is-empty{color:var(--sd-text3)}
+
+/* ---- 表单与筛选 ---- */
+.sd-field{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.sd-field label{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;line-height:1.4;color:var(--sd-text2);white-space:nowrap}
+.sd-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
+.sd-form-grid label{display:flex;flex-direction:column;gap:5px;font-size:13px;line-height:1.4;color:var(--sd-text2)}
+.sd-card label.sd-form-grid{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--sd-text2)}
+.sd-input,.sd-select{height:34px;padding:0 10px;border:1px solid var(--sd-line2);border-radius:5px;background:var(--sd-raised);color:var(--sd-text);font-family:inherit;font-size:15px;line-height:1.5;outline:none;min-width:0}
+.sd-input::placeholder{color:#948d80}
+.sd-input:focus,.sd-select:focus,.sd-text-input:focus{border-color:var(--sd-brand);outline:2px solid var(--sd-brand);outline-offset:1px}
+.sd-input.sd-id-input,.sd-id-input{width:110px;font-family:inherit;font-size:14px}
+.sd-text-input{flex:1;min-width:0;height:32px;padding:0 9px;border:1px solid var(--sd-line2);border-radius:5px;background:var(--sd-raised);color:var(--sd-text);font-family:inherit;font-size:14px;line-height:1.5;outline:none}
 .sd-select{max-width:250px}
-.sd-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;color:var(--sd-text2)}
-.sd-matrix{display:flex;flex-direction:column;border:1px solid var(--sd-line);border-radius:10px;overflow:hidden;background:var(--sd-bg)}
-.sd-item-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 9px;border-bottom:1px solid var(--sd-line)}
+.sd-root textarea.sd-input{font-family:inherit;font-size:14px;line-height:1.7;padding:9px 10px;min-height:72px}
+/* 机器文本：同一衬线族，用下沉底色 + 1px 边框 + 1.8 行高区分，不换字体 */
+.sd-root textarea.sd-code-block{background:var(--sd-sunk);border-color:var(--sd-line);font-size:13.5px;line-height:1.8;letter-spacing:.012em;padding:10px 12px}
+.sd-root input[type=checkbox],.sd-root input[type=radio]{width:15px;height:15px;accent-color:var(--sd-brand);margin:0 2px 0 0;vertical-align:-2px}
+.sd-legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;line-height:1.62;color:var(--sd-text3)}
+
+/* ---- 题目矩阵（答题纸 / 题面 / 波次） ---- */
+.sd-matrix{display:flex;flex-direction:column;border:1px solid var(--sd-line);border-radius:7px;overflow:hidden;background:var(--sd-raised)}
+.sd-item-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--sd-line-soft);min-width:0}
 .sd-item-row:last-child{border-bottom:0}
-.sd-item-row.is-reverse{background:color-mix(in oklab,var(--sd-warn) 4%,transparent)}
-.sd-item-no{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;color:var(--sd-text2);display:flex;align-items:center;gap:4px}
-.sd-item-text{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sd-item-text.is-empty{color:var(--sd-text2);font-style:italic}
-.sd-opts{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
-.sd-opt{min-width:28px;height:24px;padding:0 7px;border-radius:6px;border:1px solid var(--sd-line);background:var(--sd-bg);color:var(--sd-text2);font-size:11.5px;cursor:pointer;font-family:inherit;font-variant-numeric:tabular-nums}
-.sd-opt:hover{border-color:var(--sd-line2);background:var(--sd-raised)}
-.sd-opt.is-on{background:var(--sd-brand);border-color:var(--sd-brand);color:#fff;font-weight:600}
-.sd-drop{display:flex;flex-direction:column;align-items:center;gap:4px;padding:22px;border:2px dashed var(--sd-line2);border-radius:12px;background:var(--sd-bg);cursor:pointer;text-align:center}
-.sd-drop.is-over{border-color:var(--sd-brand);background:color-mix(in oklab,var(--sd-brand) 6%,var(--sd-bg))}
-.sd-drop strong{font-size:12.5px}
-.sd-drop span{font-size:11px;color:var(--sd-text2)}
-.sd-file{border:1px solid var(--sd-line);border-radius:8px;background:var(--sd-bg);padding:6px 9px;font-size:11.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.sd-issues{display:flex;flex-direction:column;gap:3px}
-.sd-issue{display:flex;gap:7px;align-items:flex-start;padding:4px 0;font-size:12px;line-height:1.5}
-.sd-issue .sd-badge{flex:none;margin-top:1px}
-.sd-issue-body{flex:1;min-width:0}
-.sd-issue-hint{font-size:11px;color:var(--sd-text2)}
-.sd-split{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
-.sd-empty{border:1px dashed var(--sd-line2);border-radius:12px;padding:28px 18px;text-align:center;color:var(--sd-text2);display:flex;flex-direction:column;align-items:center;gap:6px}
-.sd-empty strong{color:var(--sd-text);font-size:13px}
-.sd-toast{position:fixed;right:18px;bottom:18px;z-index:30;border:1px solid var(--sd-line2);border-radius:9px;background:var(--sd-bg);box-shadow:0 10px 30px rgba(0,0,0,.2);padding:8px 12px;font-size:12px;max-width:420px;color:var(--sd-text)}
-.sd-toast.is-bad{border-color:color-mix(in oklab,var(--sd-bad) 45%,var(--sd-line));color:var(--sd-bad)}
-.sd-alert{display:flex;gap:8px;align-items:flex-start;padding:8px 11px;border-radius:8px;font-size:12px;border:1px solid transparent;margin-bottom:8px}
-.sd-alert-warn{color:var(--sd-warn);background:color-mix(in oklab,var(--sd-warn) 9%,transparent);border-color:color-mix(in oklab,var(--sd-warn) 24%,transparent)}
-.sd-alert-bad{color:var(--sd-bad);background:color-mix(in oklab,var(--sd-bad) 8%,transparent);border-color:color-mix(in oklab,var(--sd-bad) 22%,transparent)}
-.sd-alert-ok{color:var(--sd-ok);background:color-mix(in oklab,var(--sd-ok) 8%,transparent);border-color:color-mix(in oklab,var(--sd-ok) 22%,transparent)}
-.sd-spin{width:11px;height:11px;border-radius:50%;border:2px solid color-mix(in oklab,currentColor 25%,transparent);border-top-color:currentColor;display:inline-block;animation:sd-spin .7s linear infinite}
+.sd-item-row.is-reverse{background:#f9f1e4}
+.sd-item-no{font-family:inherit;font-size:13px;color:var(--sd-text3);display:flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums}
+.sd-item-text{font-size:14.5px;line-height:1.55;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sd-item-text.is-empty{color:var(--sd-text3);font-style:italic}
+.sd-opts{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+.sd-opt{min-width:32px;height:28px;padding:0 8px;border-radius:4px;border:1px solid var(--sd-line2);background:var(--sd-raised);color:var(--sd-text2);font-family:inherit;font-size:13.5px;line-height:1;cursor:pointer;font-variant-numeric:tabular-nums}
+.sd-opt:hover{border-color:var(--sd-accent);background:var(--sd-alt);color:var(--sd-text)}
+.sd-opt.is-on{background:var(--sd-brand);border-color:var(--sd-brand);color:var(--sd-on-accent);font-weight:600}
+.sd-opt.is-on:hover{background:var(--sd-accent-deep);border-color:var(--sd-accent-deep);color:var(--sd-on-accent)}
+
+/* ---- 拖放 / 文件 ---- */
+.sd-drop{display:flex;flex-direction:column;align-items:center;gap:6px;padding:26px 18px;border:1px dashed #c9a58f;border-radius:7px;background:#faf4ef;cursor:pointer;text-align:center}
+.sd-drop.is-over{border-color:var(--sd-brand);background:var(--sd-accent-soft)}
+.sd-drop strong{font-size:15px;font-weight:600;line-height:1.5;color:var(--sd-text)}
+.sd-drop span{font-size:13px;line-height:1.6;color:var(--sd-text3)}
+.sd-file{border:1px solid var(--sd-line);border-radius:5px;background:var(--sd-alt);padding:7px 10px;font-size:13.5px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
+.sd-file b{font-weight:600}
+
+/* ---- 问题清单 ---- */
+.sd-issues{display:flex;flex-direction:column}
+.sd-issue{display:flex;gap:10px;align-items:flex-start;padding:7px 0;font-size:14px;line-height:1.62}
+.sd-issue + .sd-issue{border-top:1px solid var(--sd-line-soft)}
+.sd-issue .sd-badge{flex:none;margin-top:2px}
+.sd-issue-body{flex:1;min-width:0;overflow-wrap:anywhere}
+.sd-issue-hint{font-size:13px;line-height:1.6;color:var(--sd-text3);margin-top:2px}
+.sd-split{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;align-items:start}
+
+/* ---- 空态 / 浮层 / 提示 ---- */
+.sd-empty{border:1px dashed var(--sd-line2);border-radius:7px;background:var(--sd-panel);padding:34px 20px;text-align:center;color:var(--sd-text3);display:flex;flex-direction:column;align-items:center;gap:8px}
+.sd-empty strong{color:var(--sd-text);font-size:15px;font-weight:600;line-height:1.4}
+.sd-empty span{font-size:13.5px;line-height:1.62}
+.sd-toast{position:fixed;right:20px;bottom:20px;z-index:30;border:1px solid var(--sd-line2);border-radius:7px;background:var(--sd-raised);box-shadow:0 2px 4px -1px rgba(48,42,32,.08),0 8px 20px -12px rgba(48,42,32,.22);padding:10px 14px;font-size:13.5px;line-height:1.6;max-width:420px;color:var(--sd-text)}
+.sd-toast.is-bad{border-color:#d8b3a8;color:var(--sd-bad);background:#fbf1ed}
+.sd-alert{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:5px;font-size:13.5px;line-height:1.62;border:1px solid transparent;margin-bottom:0}
+.sd-alert-warn{color:var(--sd-warn);background:var(--sd-warn-soft);border-color:#e1d2ab}
+.sd-alert-bad{color:var(--sd-bad);background:var(--sd-bad-soft);border-color:#e0c1b7}
+.sd-alert-ok{color:var(--sd-ok);background:var(--sd-ok-soft);border-color:#cad8c8}
+.sd-spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(165,90,60,.28);border-top-color:var(--sd-brand);display:inline-block;animation:sd-spin .7s linear infinite}
 @keyframes sd-spin{to{transform:rotate(360deg)}}
-.sd-details{border:1px solid var(--sd-line);border-radius:9px;background:var(--sd-bg);padding:8px 10px}
-.sd-details summary{cursor:pointer;font-size:11.5px;color:var(--sd-text2);outline:none}
-@media (max-width:900px){
+.sd-details{border:1px solid var(--sd-line);border-radius:5px;background:var(--sd-raised);padding:9px 12px}
+.sd-details summary{cursor:pointer;font-size:13.5px;line-height:1.5;color:var(--sd-text2);outline:none}
+.sd-details summary:hover{color:var(--sd-text)}
+.sd-details[open] summary{color:var(--sd-text);font-weight:600}
+
+/* ================================================================
+ * 控件尺寸统一收口：旧版 inline 尺寸（26/24px 高、11px 字）不再生效。
+ * 只覆盖高度与字号，宽度与对齐仍由各处的 inline 决定。
+ * ================================================================ */
+.sd-root input.sd-input,.sd-root select.sd-select,.sd-root input.sd-text-input{height:34px!important;font-size:15px!important;line-height:1.5!important}
+.sd-root input.sd-id-input{font-size:14px!important}
+.sd-root .sd-table select.sd-select{height:30px!important;font-size:13px!important}
+.sd-root textarea.sd-input{font-size:14px!important;line-height:1.7!important}
+
+/* ---- 1100：右窄栏折单列，顶栏统计下沉为一行 ---- */
+@media (max-width:1100px){
 .sd-split{grid-template-columns:minmax(0,1fr)}
+.sd-top{height:auto;padding:12px 16px;flex-wrap:wrap;gap:12px}
+.sd-actions{order:2}
+.sd-stats{order:3;width:100%;margin:0;padding-top:10px;border-top:1px solid var(--sd-line-soft);gap:28px;overflow:visible}
+.sd-stats{min-width:0}
+.sd-tabs{margin:0 16px}
+.sd-scroll{padding:16px 16px 44px}
+}
+
+/* ---- 900：研究名收窄，版面收紧 ---- */
+@media (max-width:900px){
+.sd-brand span{max-width:16ch}
+.sd-stats{gap:20px}
+.sd-split{gap:12px}
+.sd-card{padding:15px 16px 16px}
+.sd-tabs{gap:18px}
+}
+
+/* ---- 700：题目行折成两行，选项铺满 ---- */
+@media (max-width:700px){
 .sd-brand span{display:none}
-.sd-stats{display:none}
-.sd-scroll{padding:10px 10px 32px}
-.sd-top{padding:0 10px}
-.sd-tabs{margin:8px 10px 0}
+.sd-stats{gap:0;justify-content:space-between}
+.sd-stat{white-space:normal}
+.sd-tabs{gap:16px;margin:0 14px}
+.sd-scroll{padding:14px 14px 40px;gap:12px}
+.sd-card{padding:14px 14px 16px}
+.sd-card-head h3{font-size:16.5px}
+.sd-item-row{grid-template-columns:28px minmax(0,1fr);row-gap:8px;padding:9px 10px}
+.sd-opts{grid-column:1 / -1;justify-content:flex-start}
+.sd-item-text{white-space:normal;overflow-wrap:anywhere}
+.sd-item-row>.sd-mono,.sd-item-row>.sd-note{grid-column:2 / -1;justify-self:start;max-width:100%;overflow-wrap:anywhere}
+.sd-kv{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.sd-form-grid{grid-template-columns:minmax(0,1fr)}
+.sd-drop{padding:22px 14px}
+}
+
+/* ---- 480：390 宽，输入与主按钮 40px ---- */
+@media (max-width:480px){
+.sd-top{padding:10px 12px;gap:10px}
+.sd-brand strong{font-size:19px}
+.sd-tabs{margin:0 12px;gap:12px}
+.sd-tab{font-size:14px;padding:10px 1px 8px;gap:4px}
+.sd-scroll{padding:12px 12px 36px}
+.sd-card{padding:13px 13px 15px;gap:10px}
+.sd-card-head h3{font-size:16px}
+.sd-btn{height:40px;font-size:15px;padding:0 14px}
+.sd-btn-sm{height:40px;padding:0 12px;font-size:15px}
+.sd-opt{height:40px;min-width:42px;font-size:15px}
+.sd-toast{left:12px;right:12px;max-width:none}
+.sd-root input.sd-input,.sd-root select.sd-select,.sd-root input.sd-text-input{height:40px!important;font-size:16px!important}
+.sd-root textarea.sd-input{font-size:16px!important}
+.sd-root .sd-table select.sd-select{height:34px!important;font-size:15px!important}
 }
 `
 
@@ -177,14 +332,14 @@ window.__ModuleLoader__.load({
      * small pieces
      * ================================================================ */
 
-    const WAVE_LABEL = { T0: 'T0 基线', T1: 'T1 诱导后', T2: 'T2 干预后', imagery: '想象后', meta: 'AI 决策后', post: '事后问卷', end: '结束', week: '一周追踪' }
+    const WAVE_LABEL = {}
     const FLOW_KIND = { scale: '量表', task: '任务', paper: '纸质', demo: '人口学', audio: '音频', text: '书写', survey: '问卷', rest: '练习' }
     const LEVEL_TEXT = { bad: '高', warn: '中', info: '提示' }
     const STATUS_TEXT = { ok: '完成', prorated: '折算', incomplete: '未计分', absent: '未录', empty: '未录', partial: '部分', duplicate: '重复编号' }
     const STATUS_CLASS = { ok: 'ok', prorated: 'warn', incomplete: 'bad', absent: 'info', empty: 'info', partial: 'warn' }
 
     function waveName(wave) {
-      return WAVE_LABEL[wave] || wave
+      return visitLabels[wave] || WAVE_LABEL[wave] || wave
     }
 
     function Btn({ children, onClick, kind, disabled, title, small }) {
@@ -207,6 +362,13 @@ window.__ModuleLoader__.load({
 
     function Empty({ title, children }) {
       return h('div', { className: 'sd-empty' }, h('strong', null, title), children ? h('span', null, children) : null)
+    }
+
+    function itemNumbers(value) {
+      const values = Array.isArray(value) ? value : String(value || '').split(/[,，、\s]+/).filter(Boolean)
+      const numbers = values.map(Number)
+      if (numbers.some(no => !Number.isInteger(no) || no < 1)) throw new Error('反向题请填写整数题号，用逗号或顿号分隔')
+      return [...new Set(numbers)].sort((a, b) => a - b)
     }
 
     function scoreText(value) {
@@ -374,7 +536,7 @@ window.__ModuleLoader__.load({
             max: Number(createForm.max),
             waves: createForm.waves.split(/[,，\s]+/).map(part => part.trim()).filter(Boolean),
             scoringType: createForm.scoringType,
-            reverse: createForm.reverse.split(/[,，\s]+/).map(Number).filter(Number.isInteger),
+            reverse: itemNumbers(createForm.reverse),
             minAnswered: createForm.minAnswered ? Number(createForm.minAnswered) : undefined
           })
           toast('已新建 ' + result.id + '（' + result.itemCount + ' 题，' + result.waves.join(' / ') + '）')
@@ -399,7 +561,7 @@ window.__ModuleLoader__.load({
           notes: instrument.notes || '',
           instructions: instrument.instructions || '',
           scoringType: instrument.scoringType,
-          reverse: instrument.reverse.join('、'),
+          reverse: [...instrument.reverse],
           minAnswered: String(instrument.missing ? instrument.missing.minAnswered : ''),
           multiSub: Object.keys((detail && detail.scoring && detail.scoring.subscales) || {}).length > 1
         })
@@ -421,9 +583,10 @@ window.__ModuleLoader__.load({
             instructions: metaForm.instructions
           }
           if (!metaForm.multiSub) {
-            payload.scoringType = metaForm.scoringType
-            payload.reverse = metaForm.reverse.split(/[,，\s]+/).map(Number).filter(Number.isInteger)
-            payload.minAnswered = metaForm.minAnswered ? Number(metaForm.minAnswered) : undefined
+            if (metaForm.scoringType !== instrument.scoringType) payload.scoringType = metaForm.scoringType
+            const reverse = itemNumbers(metaForm.reverse)
+            if (JSON.stringify(reverse) !== JSON.stringify(itemNumbers(instrument.reverse))) payload.reverse = reverse
+            if (Number(metaForm.minAnswered) !== instrument.missing.minAnswered) payload.minAnswered = Number(metaForm.minAnswered)
           }
           await call('saveMeta', payload)
           toast('已保存 ' + instrument.id + ' 的基本信息')
@@ -483,7 +646,7 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'sd-lib-top' }, h('b', null, item.short), h('span', null, item.name)),
                 h('div', { className: 'sd-lib-meta' },
                   h('span', { className: 'sd-chip' }, item.itemCount + ' 题'),
-                  h('span', { className: 'sd-chip' }, item.scoringType === 'mean' ? '均分' : '累加'),
+                  h('span', { className: 'sd-chip' }, item.scoringType === 'none' ? '只收集' : item.scoringType === 'mean' ? '均分' : '累加'),
                   h('span', { className: 'sd-chip' }, item.waves.join(' / ')),
                   h('span', { className: 'sd-chip is-brand' }, recorded + ' 份')
                 ),
@@ -580,25 +743,25 @@ window.__ModuleLoader__.load({
                             )),
                         metaForm.multiSub
                           ? null
-                          : h('label', null, '反向题号（逗号分隔）', h('input', { className: 'sd-input', value: metaForm.reverse, onChange: event => setMetaForm(prev => ({ ...prev, reverse: event.target.value })) })),
+                          : h('label', null, '反向题号（逗号分隔）', h('input', { className: 'sd-input', value: Array.isArray(metaForm.reverse) ? metaForm.reverse.join('、') : metaForm.reverse, onChange: event => setMetaForm(prev => ({ ...prev, reverse: event.target.value })) })),
                         metaForm.multiSub
                           ? null
                           : h('label', null, '缺失门槛（题数）', h('input', { className: 'sd-input', type: 'number', value: metaForm.minAnswered, onChange: event => setMetaForm(prev => ({ ...prev, minAnswered: event.target.value })) }))
                       ),
-                      h('label', { style: { display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--sd-text2)' } },
+                      h('label', { style: { display: 'flex', flexDirection: 'column', gap: 5, fontSize: 13, color: 'var(--sd-text2)' } },
                         '计分说明',
                         h('textarea', {
                           className: 'sd-input',
-                          style: { height: 54, padding: 6, resize: 'vertical', fontSize: 11.5 },
+                          style: { height: 54, resize: 'vertical' },
                           value: metaForm.notes,
                           onChange: event => setMetaForm(prev => ({ ...prev, notes: event.target.value }))
                         })
                       ),
-                      h('label', { style: { display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--sd-text2)' } },
+                      h('label', { style: { display: 'flex', flexDirection: 'column', gap: 5, fontSize: 13, color: 'var(--sd-text2)' } },
                         '指导语',
                         h('textarea', {
                           className: 'sd-input',
-                          style: { height: 72, padding: 6, resize: 'vertical', fontSize: 11.5 },
+                          style: { height: 72, resize: 'vertical' },
                           value: metaForm.instructions,
                           onChange: event => setMetaForm(prev => ({ ...prev, instructions: event.target.value }))
                         })
@@ -647,12 +810,12 @@ window.__ModuleLoader__.load({
                     )
                   ),
                   editing
-                    ? h('div', { className: 'sd-card', style: { background: 'var(--sd-bg)' } },
+                    ? h('div', { className: 'sd-card', style: { background: 'var(--sd-sunk)' } },
                         h('details', { className: 'sd-details' },
                           h('summary', null, '从 Word / Excel 粘贴题目（题号 + 题目，一行一题）'),
                           h('textarea', {
                             className: 'sd-input',
-                            style: { width: '100%', height: 130, marginTop: 8, padding: 8, fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 11.5, resize: 'vertical' },
+                            style: { width: '100%', height: 130, marginTop: 8, resize: 'vertical' },
                             value: pasteText,
                             placeholder: '1\t第 1 题的文字\n2\t第 2 题的文字\n（也可以只贴题目，按题号顺序自动排）',
                             onChange: event => setPasteText(event.target.value)
@@ -756,7 +919,7 @@ window.__ModuleLoader__.load({
                           ? h('input', {
                               className: 'sd-text-input',
                               value: row.prefix,
-                              placeholder: '导出码前缀，如 t3_ftps_',
+                              placeholder: '导出码前缀，如 later_garden_',
                               onChange: event => setWavesDraft(prev => prev.map((entry, at) => at === index ? { ...entry, prefix: event.target.value } : entry))
                             })
                           : h('span', { className: 'sd-note' }, row.prefix
@@ -785,7 +948,7 @@ window.__ModuleLoader__.load({
                   h('div', { className: 'sd-card-head' }, h('h3', null, '计分键')),
                   detail.scoring.subscales.map(sub => h('div', { key: sub.key, style: { display: 'flex', flexDirection: 'column', gap: 2 } },
                     h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
-                      h('b', { style: { fontSize: 12 } }, sub.label),
+                      h('b', { style: { fontSize: 15, fontWeight: 600 } }, sub.label),
                       h('span', { className: 'sd-chip' }, sub.items.length + ' 题'),
                       sub.range ? h('span', { className: 'sd-chip' }, '范围 ' + sub.range[0] + '–' + sub.range[1]) : null,
                       sub.multiplier !== 1 ? h('span', { className: 'sd-chip' }, '×' + sub.multiplier) : null,
@@ -797,7 +960,7 @@ window.__ModuleLoader__.load({
                 ),
                 h('div', { className: 'sd-card' },
                   h('div', { className: 'sd-card-head' }, h('h3', null, '出处与授权')),
-                  h('div', { style: { fontSize: 11.5, color: 'var(--sd-text2)', display: 'flex', flexDirection: 'column', gap: 6 } },
+                  h('div', { style: { fontSize: 13.5, color: 'var(--sd-text2)', display: 'flex', flexDirection: 'column', gap: 8 } },
                     h('div', null, h('b', { style: { color: 'var(--sd-text)' } }, '来源：'), instrument.source || '—'),
                     h('div', null, h('b', { style: { color: 'var(--sd-text)' } }, '授权：'), instrument.license || '—'),
                     instrument.notes ? h('div', null, h('b', { style: { color: 'var(--sd-text)' } }, '计分说明：'), instrument.notes) : null,
@@ -854,8 +1017,8 @@ window.__ModuleLoader__.load({
       const load = useCallback(async targetId => {
         if (!def) return
         const clean = String(targetId || id).trim()
-        if (!/^\d{5}$/.test(clean)) {
-          setError('编号要 5 位数字，如 11002')
+        if (!clean) {
+          setError('编号不能为空')
           return
         }
         setError('')
@@ -874,8 +1037,8 @@ window.__ModuleLoader__.load({
       const save = async () => {
         if (!def) return
         const clean = String(id).trim()
-        if (!/^\d{5}$/.test(clean)) {
-          setError('编号要 5 位数字，如 11002')
+        if (!clean) {
+          setError('编号不能为空')
           return
         }
         setError('')
@@ -901,7 +1064,7 @@ window.__ModuleLoader__.load({
       const clearOne = async () => {
         if (!def) return
         const clean = String(id).trim()
-        if (!/^\d{5}$/.test(clean)) return
+        if (!clean) return
         try {
           await onClear({ id: clean, scale: def.id, wave })
           setValues({})
@@ -918,26 +1081,28 @@ window.__ModuleLoader__.load({
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
         h('div', { className: 'sd-card' },
           h('div', { className: 'sd-field' },
-            h('label', null, '量表'),
+            h('label', { htmlFor: 'sd-sheet-scale' }, '量表'),
             h('select', {
+              id: 'sd-sheet-scale',
               className: 'sd-select',
               value: def ? def.id : '',
               onChange: event => { setScaleId(event.target.value); setValues({}); setResult(null); setLoaded(null) }
             }, data.instruments.map(item => h('option', { key: item.id, value: item.id }, item.short + '（' + item.itemCount + ' 题）'))),
-            h('label', null, '波次'),
+            h('label', { htmlFor: 'sd-sheet-wave' }, '波次'),
             h('select', {
+              id: 'sd-sheet-wave',
               className: 'sd-select',
               style: { maxWidth: 130 },
               value: wave,
               onChange: event => { setWave(event.target.value); setValues({}); setResult(null); setLoaded(null) }
             }, (def ? def.waves : []).map(item => h('option', { key: item, value: item }, waveName(item)))),
-            h('label', null, '编号'),
+            h('label', { htmlFor: 'sd-sheet-id' }, '编号'),
             h('input', {
+              id: 'sd-sheet-id',
               className: 'sd-input sd-id-input',
               value: id,
-              placeholder: '11002',
-              inputMode: 'numeric',
-              onChange: event => setId(event.target.value.replace(/[^\d]/g, '').slice(0, 5)),
+              placeholder: 'P-001',
+              onChange: event => setId(event.target.value),
               onKeyDown: event => { if (event.key === 'Enter') load() }
             }),
             Btn({ children: '载入', kind: 'outline', onClick: () => load(), disabled: busy }),
@@ -980,9 +1145,11 @@ window.__ModuleLoader__.load({
                       return draft
                     })
                   }
-                  return h('div', { className: 'sd-item-row' + (reverse ? ' is-reverse' : ''), key: no },
+                  const labelId = 'sd-sheet-question-' + no
+                  return h('div', { className: 'sd-item-row' + (reverse ? ' is-reverse' : ''), key: no, role: 'group', 'aria-labelledby': labelId },
                     h('span', { className: 'sd-item-no' }, String(no)),
                     h('span', {
+                      id: labelId,
                       className: 'sd-item-text' + (itemText ? '' : ' is-empty'),
                       title: itemText || '第 ' + no + ' 题（文本未录入）'
                     }, itemText || '第 ' + no + ' 题'),
@@ -992,6 +1159,7 @@ window.__ModuleLoader__.load({
                             className: 'sd-input',
                             style: { width: 280, height: 26, fontSize: 11.5 },
                             value: current,
+                            'aria-labelledby': labelId,
                             maxLength: entry.maxLength || 2000,
                             placeholder: entry.maxLength ? '文本，最多 ' + entry.maxLength + ' 字' : '文本',
                             onChange: event => setValue(event.target.value)
@@ -1005,6 +1173,7 @@ window.__ModuleLoader__.load({
                                 key: option.value,
                                 type: 'button',
                                 className: 'sd-opt' + (selected ? ' is-on' : ''),
+                                'aria-pressed': selected,
                                 title: option.value,
                                 onClick: () => {
                                   if (kind === 'multi') {
@@ -1023,6 +1192,7 @@ window.__ModuleLoader__.load({
                             ? h('input', {
                                 className: 'sd-input',
                                 type: 'number',
+                                'aria-labelledby': labelId,
                                 min: entry.min === null || entry.min === undefined ? undefined : entry.min,
                                 max: entry.max === null || entry.max === undefined ? undefined : entry.max,
                                 style: { width: 120, height: 26, fontSize: 11.5, textAlign: 'right' },
@@ -1034,6 +1204,7 @@ window.__ModuleLoader__.load({
                               ? h('input', {
                                   className: 'sd-input',
                                   type: 'number',
+                                  'aria-labelledby': labelId,
                                   min: def.response.min,
                                   max: def.response.max,
                                   style: { width: 96, height: 26, fontSize: 11.5, textAlign: 'right' },
@@ -1048,6 +1219,8 @@ window.__ModuleLoader__.load({
                                     key: value,
                                     type: 'button',
                                     className: 'sd-opt' + (on ? ' is-on' : ''),
+                                    'aria-pressed': on,
+                                    'aria-label': String(value) + (def.response.labels[value] ? ' · ' + def.response.labels[value] : ''),
                                     title: def.response.labels[value] || '',
                                     onClick: () => setValue(on ? '' : String(value))
                                   }, String(value))
@@ -1082,7 +1255,7 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       key: row.id,
                       className: 'sd-chip',
-                      style: { cursor: 'pointer', height: 24, fontFamily: 'ui-monospace,Consolas,monospace' },
+                      style: { cursor: 'pointer' },
                       title: '缺 ' + (row.missing ?? 0) + ' 题',
                       onClick: () => load(row.id)
                     }, row.id + (row.missing ? ' ·缺' + row.missing : '')))
@@ -1144,7 +1317,7 @@ window.__ModuleLoader__.load({
               ? { data: source.base64, filename: source.name }
               : { text: source.text, filename: source.name }
             const next = await call('importPreview', payload)
-            results.push({ ...source, status: 'ok', data: next, imported: false, auto: true })
+            results.push({ ...source, status: next.requiresTarget ? 'error' : 'ok', error: next.requiresTarget ? '仅有候选：' + next.targets.map(target => target.short + ' ' + target.wave).join('、') + '。请选择目标后预览。' : '', data: next, imported: false, auto: !next.requiresTarget, targets: next.targets.filter(target => target.automatic) })
           } catch (err) {
             results.push({ ...source, status: 'error', error: err.message })
           }
@@ -1170,7 +1343,7 @@ window.__ModuleLoader__.load({
             ? { data: entry.base64, filename: entry.name, scale: choice.scale, wave: choice.wave }
             : { text: entry.text, filename: entry.name, scale: choice.scale, wave: choice.wave }
           const next = await call('importPreview', payload)
-          setPreviews(prev => prev.map((item, at) => at === index ? { ...item, status: 'ok', data: next, auto: false, error: '' } : item))
+          setPreviews(prev => prev.map((item, at) => at === index ? { ...item, status: 'ok', data: next, auto: false, error: '', mappingError: false } : item))
           setFocus(index)
         } catch (err) {
           setError(entry.name + '：' + err.message)
@@ -1179,13 +1352,30 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const updateMapping = async (index, mapping, target) => {
+        const entry = previews[index]
+        if (!entry) return
+        const scale = target ? target.scale : entry.data.scale
+        const wave = target ? target.wave : entry.data.wave
+        setBusy('mapping')
+        setError('')
+        // A failed preview must not leave an importable stale mapping behind.
+        setPreviews(prev => prev.map((item, at) => at === index ? { ...item, mappingError: true } : item))
+        try {
+          const next = await call('importPreview', { data: entry.base64, text: entry.text, filename: entry.name, scale, wave, mapping })
+          setPreviews(prev => prev.map((item, at) => at === index ? { ...item, mappingError: false, data: next, targets: (item.targets || []).map(candidate => candidate.scale === scale && candidate.wave === wave ? { ...candidate, mapping: next.mapping } : candidate) } : item))
+        } catch (err) { setError(err.message) } finally { setBusy('') }
+      }
+
       const applyEntry = async entry => {
+        if (entry.mappingError) throw new Error('列映射尚未通过预览，请修正后重试')
         if (entry.auto) {
           const result = await call('importFile', {
             data: entry.base64 || undefined,
             text: entry.text || undefined,
             filename: entry.name,
-            mode
+            mode,
+            targets: entry.targets.map(target => ({ scale: target.scale, wave: target.wave, mapping: target.scale === entry.data.scale && target.wave === entry.data.wave ? entry.data.mapping : target.mapping }))
           })
           return { multi: true, result }
         }
@@ -1227,7 +1417,7 @@ window.__ModuleLoader__.load({
       const importAll = async () => {
         const pending = previews
           .map((entry, index) => ({ entry, index }))
-          .filter(item => item.entry.status === 'ok' && !item.entry.imported)
+          .filter(item => item.entry.status === 'ok' && !item.entry.imported && !item.entry.mappingError)
         if (!pending.length) return
         setBusy('apply-all')
         setError('')
@@ -1250,7 +1440,7 @@ window.__ModuleLoader__.load({
 
       const focused = previews[focus]
       const headers = focused && focused.status === 'ok' ? focused.data.header : []
-      const okCount = previews.filter(item => item.status === 'ok' && !item.imported).length
+      const okCount = previews.filter(item => item.status === 'ok' && !item.imported && !item.mappingError).length
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
         h('div', { className: 'sd-card' },
@@ -1269,10 +1459,11 @@ window.__ModuleLoader__.load({
               setOver(false)
               readFiles(event.dataTransfer.files)
             },
-            onClick: () => fileRef.current && fileRef.current.click()
+            onClick: () => fileRef.current && fileRef.current.click(),
+            onKeyDown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (fileRef.current) fileRef.current.click() } }
           },
             h('strong', null, '把导出文件拖到这里，或点一下选文件（可多选）'),
-            h('span', null, '一份文件里常有多组量表：先按题码认，认不出再按题目文字或顺序认；认过一次就把题码记进定义')
+            h('span', null, '专用题码可识别多个目标；通用题号、文字与顺序只提供候选，需选择量表与波次。')
           ),
           h('input', {
             ref: fileRef,
@@ -1301,9 +1492,9 @@ window.__ModuleLoader__.load({
               h('summary', null, text ? '粘贴的文本（' + text.length + ' 字符）' : '也可以直接粘贴表格文本'),
               h('textarea', {
                 className: 'sd-input',
-                style: { width: '100%', height: 110, marginTop: 8, padding: 8, fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 11.5, resize: 'vertical' },
+                style: { width: '100%', height: 110, marginTop: 8, resize: 'vertical' },
                 value: text,
-                placeholder: '编号,t0_ftps_01,...',
+                placeholder: 'participantId,garden_b_1,...',
                 onChange: event => { setText(event.target.value); setFiles([]); setPreviews([]) }
               })
             ),
@@ -1322,7 +1513,7 @@ window.__ModuleLoader__.load({
                 h('h3', null, '待导入 ' + previews.length + ' 份'),
                 h('span', { className: 'sd-note' }, '点一行看它的映射；每份可以单独导入'),
                 h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
-                  Btn({ children: busy === 'apply-all' ? '导入中…' : '导入全部可识别（' + okCount + '）', kind: 'primary', small: true, disabled: Boolean(busy) || !okCount, onClick: importAll })
+                  Btn({ children: busy === 'apply-all' ? '导入中…' : '导入已确认目标（' + okCount + '）', kind: 'primary', small: true, disabled: Boolean(busy) || !okCount, onClick: importAll })
                 )
               ),
               h('div', { className: 'sd-table-wrap', style: { maxHeight: 'none' } },
@@ -1347,8 +1538,8 @@ window.__ModuleLoader__.load({
                       h('td', { className: 'sd-note' }, ok ? entry.data.sheet || '—' : ''),
                       h('td', null, ok
                         ? (entry.auto
-                            ? h('span', { className: 'sd-note', title: (entry.data.targets || []).map(t => t.short + ' ' + t.wave).join('，') },
-                                (entry.data.targets || []).length + ' 组：' + (entry.data.targets || []).slice(0, 2).map(t => t.short).join('、') + ((entry.data.targets || []).length > 2 ? '…' : ''))
+                            ? h('span', { className: 'sd-note', title: (entry.targets || []).map(t => t.short + ' ' + t.wave).join('，') },
+                                (entry.targets || []).length + ' 组：' + (entry.targets || []).slice(0, 2).map(t => t.short).join('、') + ((entry.targets || []).length > 2 ? '…' : ''))
                             : entry.data.scale + ' · ' + waveName(entry.data.wave))
                         : '—'),
                       h('td', { className: 'is-score' }, ok ? String(entry.data.rows) : ''),
@@ -1360,7 +1551,7 @@ window.__ModuleLoader__.load({
                           : h('span', { className: 'sd-badge sd-badge-bad', title: entry.error }, '认不出')),
                       h('td', null, ok && !entry.imported
                         ? h(Btn, {
-                            children: busy === 'apply-' + index ? '导入中…' : entry.auto ? '导入全部匹配' : '导入这一组',
+                            children: busy === 'apply-' + index ? '导入中…' : entry.auto ? '导入确认目标' : '导入这一组',
                             kind: 'outline',
                             small: true,
                             disabled: Boolean(busy),
@@ -1412,7 +1603,14 @@ window.__ModuleLoader__.load({
               h('div', { className: 'sd-card-head' },
                 h('h3', null, '映射：' + focused.name),
                 h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' } },
-                  h('span', { className: 'sd-note' }, '编号列：', h('b', null, focused.data.mapping.idColumn)),
+                  h('label', { className: 'sd-field' }, '编号列', h('select', {
+                    className: 'sd-select', value: focused.data.mapping.idIndex, disabled: Boolean(busy) || focused.imported,
+                    onChange: event => updateMapping(focus, { ...focused.data.mapping, idIndex: Number(event.target.value) })
+                  }, headers.map((name, index) => h('option', { key: index, value: index }, (index + 1) + ' · ' + name)))),
+                  focused.auto ? h('label', { className: 'sd-field' }, '查看目标', h('select', {
+                    className: 'sd-select', value: JSON.stringify([focused.data.scale, focused.data.wave]), disabled: Boolean(busy) || focused.imported,
+                    onChange: event => { const [scale, wave] = JSON.parse(event.target.value); const target = focused.targets.find(target => target.scale === scale && target.wave === wave); updateMapping(focus, target.mapping, target) }
+                  }, focused.targets.map(target => h('option', { key: JSON.stringify([target.scale,target.wave]), value: JSON.stringify([target.scale,target.wave]) }, target.short + ' ' + target.wave)))) : null,
                   h('span', { className: 'sd-chip' }, focused.data.scaleName + ' · ' + waveName(focused.data.wave)),
                   h('span', { className: 'sd-chip' }, '匹配 ' + focused.data.mapping.matched + '/' + focused.data.mapping.total),
                   h('span', { className: 'sd-chip' }, focused.data.rows + ' 行'),
@@ -1446,22 +1644,15 @@ window.__ModuleLoader__.load({
                     h('select', {
                       className: 'sd-select',
                       style: { flex: 1, maxWidth: 'none', height: 26, fontSize: 11 },
-                      value: item.column || '',
-                      onChange: event => {
-                        const column = event.target.value || null
-                        setPreviews(prev => prev.map((entry, index) => {
-                          if (index !== focus || entry.status !== 'ok') return entry
-                          const mapping = {
-                            ...entry.data.mapping,
-                            items: entry.data.mapping.items.map(candidate => candidate.no === item.no ? { ...candidate, column, how: 'manual' } : candidate),
-                            matched: entry.data.mapping.items.filter(candidate => (candidate.no === item.no ? column : candidate.column)).length
-                          }
-                          return { ...entry, data: { ...entry.data, mapping } }
-                        }))
-                      }
-                    },
-                      h('option', { value: '' }, '（缺失）'),
-                      headers.map(name => h('option', { key: name, value: name }, name))
+                      value: item.index,
+                       disabled: Boolean(busy) || focused.imported,
+                       onChange: event => {
+                         const index = Number(event.target.value)
+                         updateMapping(focus, { ...focused.data.mapping, items: focused.data.mapping.items.map(candidate => candidate.no === item.no ? { ...candidate, index, column: index >= 0 ? headers[index] : null, how: 'manual' } : candidate) })
+                       }
+                     },
+                       h('option', { value: -1 }, '（缺失）'),
+                       headers.map((name, index) => h('option', { key: index, value: index }, (index + 1) + ' · ' + name))
                     )
                   ))
                 )
@@ -1476,9 +1667,9 @@ window.__ModuleLoader__.load({
                 : null,
               h('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
                 Btn({
-                  children: busy === 'apply-' + focus ? '导入中…' : focused.imported ? '已导入' : focused.auto ? '导入这份文件（全部匹配）' : '导入这一组',
+                  children: busy === 'apply-' + focus ? '导入中…' : focused.imported ? '已导入' : focused.auto ? '导入这份文件（确认目标）' : '导入这一组',
                   kind: 'primary',
-                  disabled: Boolean(busy) || focused.imported,
+                  disabled: Boolean(busy) || focused.imported || focused.mappingError,
                   onClick: () => importAt(focus)
                 })
               )
@@ -1488,7 +1679,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'sd-card-head' }, h('h3', null, '导入记录'), h('span', { className: 'sd-note' }, '写进 _lab/scales/imports.json，含当时的定义版本')),
           data.imports && data.imports.length
             ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-                data.imports.map((entry, index) => h('div', { key: index, style: { display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11.5 } },
+                data.imports.map((entry, index) => h('div', { key: index, style: { display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 13, flexWrap: 'wrap' } },
                   h('span', { className: 'sd-note mono' }, String(entry.at || '').replace('T', ' ').slice(0, 16)),
                   h('span', { className: 'sd-chip' }, entry.action === 'import' ? '导入' : entry.action === 'manual' ? '手填' : entry.action === 'keep-one' ? '留一份' : entry.action === 'rename' ? '改号' : entry.action === 'delete-row' ? '删行' : '删除'),
                   h('span', { className: 'sd-mono' }, entry.scale + ' ' + entry.wave),
@@ -1549,7 +1740,7 @@ window.__ModuleLoader__.load({
                   padding: '5px 8px',
                   border: '1px solid var(--sd-line)',
                   borderRadius: 8,
-                  background: 'var(--sd-bg)'
+                  background: 'var(--sd-raised)'
                 }
               },
                 h('span', { className: 'sd-note', style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, String(index + 1)),
@@ -1557,7 +1748,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 } },
                   h('span', {
                     style: {
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: isScale ? 600 : 400,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -1684,7 +1875,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'sd-card' },
         h('div', { className: 'sd-card-head' },
           h('h3', null, '批量清理'),
-          h('span', { className: 'sd-note' }, '编号不是 5 位、或同一编号有多份的作答；勾选后一次删掉，跨所有量表与波次'),
+          h('span', { className: 'sd-note' }, '编号为空、或同一编号有多份的作答；勾选后一次删掉，跨所有量表与波次'),
           h('div', { style: { marginLeft: 'auto', display: 'flex', gap: 6 } },
             Btn({ children: '重新扫描', kind: 'ghost', small: true, onClick: load, disabled: Boolean(busy) })
           )
@@ -1887,7 +2078,7 @@ window.__ModuleLoader__.load({
                     h('td', null, h('input', {
                       className: 'sd-input sd-id-input',
                       value: drafts[row.index] !== undefined ? drafts[row.index] : row.id,
-                      onChange: event => setDrafts(prev => ({ ...prev, [row.index]: event.target.value.replace(/[^\d]/g, '').slice(0, 5) })),
+                      onChange: event => setDrafts(prev => ({ ...prev, [row.index]: event.target.value })),
                       onKeyDown: event => { if (event.key === 'Enter') rename(row.index) }
                     })),
                     h('td', { className: 'is-score' }, String(row.answered)),
@@ -2030,12 +2221,12 @@ window.__ModuleLoader__.load({
             h('span', null, '重复 = 同一编号有多份，先去「录入 → 核对」留一份'),
             h('span', null, '— = 这个阶段还没有他的作答'),
             h('span', null, '缺题 = 这一阶段没答的题数；0 表示一题没缺，不是 0 分'),
-            h('span', null, '只收集不计分的问卷（AI 元问卷、事后问卷等）没有分数列，只有缺题列')
+            h('span', null, '只收集不计分的问卷没有分数列，只有缺题列')
           ),
           h('details', { className: 'sd-details' },
             h('summary', null, '每一列是什么（点开对照）'),
             h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(230px,1fr))', gap: '4px 12px', marginTop: 8 } },
-              data.scores.columns.map(col => h('div', { key: col.key, style: { display: 'flex', gap: 6, fontSize: 11.5 } },
+              data.scores.columns.map(col => h('div', { key: col.key, style: { display: 'flex', gap: 8, fontSize: 13 } },
                 h('span', { className: 'sd-mono', style: { color: 'var(--sd-text2)' } }, col.key),
                 h('span', null, '= ' + (col.label || '') + (col.kind === 'missing' ? '' : col.range ? '（' + col.range[0] + '–' + col.range[1] + '）' : ''))
               ))
@@ -2090,6 +2281,10 @@ window.__ModuleLoader__.load({
                   h('tbody', null, shown.map(row => h(React.Fragment, { key: row.id },
                     h('tr', {
                       className: open === row.id ? 'is-open' : '',
+                      tabIndex: 0,
+                      'aria-label': row.id + ' 分数明细',
+                      'aria-expanded': open === row.id,
+                      onKeyDown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOpen(open === row.id ? '' : row.id); setDetailRow(null) } },
                       onClick: () => {
                         if (open === row.id) {
                           setOpen('')
@@ -2161,6 +2356,7 @@ window.__ModuleLoader__.load({
     }
 
     function ItemDetail({ detail }) {
+      if (detail.status === 'duplicate') return h('div', { className: 'sd-alert sd-alert-warn', role: 'status' }, detail.short + ' ' + waveName(detail.wave) + '：同编号有 ' + detail.copies + ' 份作答，未计分。请在「录入 → 核对」保留一份。')
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' } },
           h('b', null, detail.short + ' · ' + waveName(detail.wave)),
@@ -2250,6 +2446,49 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function StudyTab({ data, toast, refresh }) {
+      const [documentText, setDocumentText] = useState('')
+      const [studyPath, setStudyPath] = useState(data.study?.path || '')
+      const [preview, setPreview] = useState(null)
+      const [error, setError] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [baseRevision, setBaseRevision] = useState(data.study?.revision || '')
+      const [capabilities, setCapabilities] = useState(null)
+      useEffect(() => { call('studyConfig').then(result => { setDocumentText(JSON.stringify(result.definition, null, 2)); setBaseRevision(result.study.revision); setStudyPath(result.study.path || '') }).catch(error => setError(error.message)) }, [data.study?.id])
+      useEffect(() => { let alive = true; call('capabilities').then(result => { if (alive) setCapabilities(result) }).catch(() => { if (alive) setCapabilities(null) }); return () => { alive = false } }, [data.binding?.bindingRevision])
+      const view = data.binding || {}
+      const source = SOURCE_LABEL[view.source] || view.source || '未连接'
+      const run = async action => {
+        setBusy(true); setError('')
+        try {
+          if (action === 'preview') setPreview(await call('studyPreview', { definition: documentText, path: studyPath }))
+          else if (action === 'connect') { newPage(); await call('studyConnect', { path: studyPath }); setPreview(null); await refresh(); toast('已连接研究') }
+          else if (action === 'save') { newPage(); await call('studySave', { definition: documentText, path: studyPath, expectedRevision: studyPath === data.study?.path ? baseRevision : undefined }); setPreview(null); await refresh(); toast('已保存并连接研究') }
+          else { await call('initialize', { sample: action === 'sample' }); await refresh(); toast(action === 'sample' ? '已加入虚构示例定义' : '已初始化空研究目录') }
+        } catch (error) { setError(error.message) } finally { setBusy(false) }
+      }
+      return h('div', { className: 'sd-card' },
+        h('div', { className: 'sd-card-head' }, h('h3', null, '研究连接'), h('span', { className: 'sd-note' }, data.study?.name + ' · ' + data.study?.id)),
+        h('p', { className: 'sd-note' }, '连接只改变当前页面的研究绑定：其他标签页与会话保留各自的研究。编辑名称、编号规则、访视与任务后可另存研究，相对路径以研究文件目录解析；保存前先验证。'),
+        h('div', { className: 'sd-kv' },
+          h('div', { className: 'sd-kv-item' }, h('span', null, '绑定来源'), h('b', null, source)),
+          h('div', { className: 'sd-kv-item' }, h('span', null, '绑定实例'), h('b', { title: view.instanceId || '' }, view.instanceId ? String(view.instanceId).slice(0, 12) : '—')),
+          h('div', { className: 'sd-kv-item' }, h('span', null, '绑定版本'), h('b', null, view.bindingRevision === undefined ? '—' : String(view.bindingRevision))),
+          h('div', { className: 'sd-kv-item' }, h('span', null, '数据目录'), h('b', { title: data.study?.dataRoot || '' }, data.study?.dataRoot || '—'))
+        ),
+        capabilities
+          ? h('div', { className: 'sd-note' }, '跨插件身份：' + (capabilities.consistent ? '一致' : '存在不同研究') + '；已注册：' + (capabilities.plugins || []).map(plugin => plugin.name + (plugin.matchesBinding === false ? '（未同步）' : '')).join('、'))
+          : null,
+        h('label', { className: 'sd-form-grid' }, '研究JSON本机路径', h('input', { className: 'sd-input', value: studyPath, placeholder: 'D:/my-study/study.json', onChange: event => { setStudyPath(event.target.value); setPreview(null) } })),
+        h('div', { className: 'sd-field' }, h(Btn, { children: '连接已有研究', onClick: () => run('connect'), disabled: busy || !studyPath.trim() }), h(Btn, { children: '验证预览', onClick: () => run('preview'), disabled: busy }), h(Btn, { children: '保存并连接', kind: 'primary', onClick: () => run('save'), disabled: busy || !preview?.valid || !studyPath.trim() })),
+        h('label', { className: 'sd-form-grid' }, '研究定义JSON（visits为访视，tasks为任务）', h('textarea', { className: 'sd-input sd-code-block', style: { height: 330, resize: 'vertical' }, value: documentText, onChange: event => { setDocumentText(event.target.value); setPreview(null) } })),
+        preview ? h('div', { className: 'sd-alert ' + (preview.valid ? 'sd-alert-ok' : 'sd-alert-bad'), role: 'status' }, preview.valid ? '定义有效：' + preview.definition.name + '，访视 ' + (preview.definition.visits || []).length + '，任务 ' + (preview.definition.tasks || []).length : preview.problems.join('；')) : null,
+        error ? h('div', { className: 'sd-alert sd-alert-bad', role: 'alert' }, error) : null,
+        h('div', { className: 'sd-field' }, h(Btn, { children: '初始化空目录', onClick: () => run('blank'), disabled: busy }), h(Btn, { children: '加入虚构花园示例', onClick: () => run('sample'), disabled: busy }), h('span', { className: 'sd-note' }, '这两个动作才会创建研究数据目录；示例不含真实研究材料。')),
+        h('div', { className: 'sd-note' }, '数据目录：' + data.study?.dataRoot)
+      )
+    }
+
     /* ================================================================ *
      * panel shell
      * ================================================================ */
@@ -2261,10 +2500,14 @@ window.__ModuleLoader__.load({
       const [tab, setTab] = useState('library')
       const [entryTarget, setEntryTarget] = useState(null)
       const [toastState, setToastState] = useState(null)
+      const [stale, setStale] = useState(false)
       const timer = useRef(null)
 
-      const openScale = useCallback((scale, wave) => {
-        setEntryTarget({ scale, wave, n: Date.now() })
+      // 写入被研究核心拒绝（409）时立即亮出冲突提示，别等下一次刷新。
+      useEffect(() => { staleWatch = () => setStale(true); return () => { staleWatch = null } }, [])
+
+      const openScale = useCallback((scale, wave, id) => {
+        setEntryTarget({ scale, wave, id, n: Date.now() })
         setTab('entry')
       }, [])
 
@@ -2279,10 +2522,15 @@ window.__ModuleLoader__.load({
       const load = useCallback(async (hard) => {
         try {
           const next = hard ? await call('refresh') : await call('status')
+          activeStudyId = next.study?.id
+          activeRevision = next.revision
+          visitLabels = Object.fromEntries((next.visits || []).map(visit => [visit.id, visit.label || visit.id]))
           setData(next)
+          setStale(staleBinding)
           setError('')
           return next
         } catch (err) {
+          setStale(staleBinding)
           setError(err.message)
           return null
         }
@@ -2290,13 +2538,43 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { load(false) }, [load])
 
+      // 运行台"在量表计分中打开这个编号"的跨面板提示：只在 2 分钟内有效，用完即清。
+      const focusRef = useRef(null)
+      useEffect(() => {
+        try {
+          const raw = localStorage.getItem(FOCUS_KEY)
+          if (!raw) return
+          const hint = JSON.parse(raw)
+          if (!hint || !hint.at || Date.now() - hint.at > 120000) { localStorage.removeItem(FOCUS_KEY); return }
+          focusRef.current = hint
+        } catch { /* 损坏的提示直接忽略 */ }
+      }, [])
+      useEffect(() => {
+        if (!data || !focusRef.current) return
+        const hint = focusRef.current
+        const target = (data.instruments || []).find(item => item.id === hint.scaleId)
+        focusRef.current = null
+        try { localStorage.removeItem(FOCUS_KEY) } catch { /* 忽略 */ }
+        if (!target) { toast('运行台带来的量表 ' + hint.scaleId + ' 不在当前研究里'); return }
+        openScale(hint.scaleId, hint.waveId, hint.participantId)
+        toast('已从运行台打开：' + hint.participantId + ' · ' + hint.waveId)
+      }, [data, openScale, toast])
+
       const refresh = useCallback(() => load(true), [load])
 
+      const publishNote = result => {
+        if (result && result.publishError) return '；发布 observation 失败：' + result.publishError
+        if (result && result.publish && typeof result.publish.published === 'number') {
+          const skipped = result.publish.changed ? '，跳过 ' + result.publish.changed + ' 条来源版本不同的记录' : ''
+          return '；已发布 observation ' + result.publish.published + ' 条' + skipped + '（未登记待关联 ' + (result.publish.unregistered || 0) + ' 条）'
+        }
+        return ''
+      }
       const runScore = useCallback(async () => {
         setBusy('score')
         try {
-          const result = await call('score')
-          toast('已重算并写入：' + result.rows + ' 行 × ' + result.columns + ' 列；明细 ' + result.detailRows + ' 行。')
+          const result = await call('score', {})
+          toast('已重算并写入：' + result.rows + ' 行 × ' + result.columns + ' 列；明细 ' + result.detailRows + ' 行。' + publishNote(result), result && result.publishError ? 'bad' : 'ok')
           await refresh()
         } catch (err) {
           toast(err.message, 'bad')
@@ -2308,8 +2586,8 @@ window.__ModuleLoader__.load({
       const runExport = useCallback(async () => {
         setBusy('export')
         try {
-          const result = await call('export')
-          toast('已导出：' + result.csv)
+          const result = await call('export', {})
+          toast('已导出：' + result.csv + publishNote(result), result && result.publishError ? 'bad' : 'ok')
           await refresh()
         } catch (err) {
           toast(err.message, 'bad')
@@ -2348,7 +2626,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'sd-top' },
           h('div', { className: 'sd-brand' },
             h('strong', null, '量表计分'),
-            h('span', null, '定义、作答、分数、校验都在 _lab；题目文本不入库')
+            h('span', null, data?.study?.name || '定义、作答、分数与校验')
           ),
           data
             ? h('div', { className: 'sd-stats' },
@@ -2365,7 +2643,7 @@ window.__ModuleLoader__.load({
         ),
         data
           ? h('div', { className: 'sd-tabs' },
-              [['library', '量表库'], ['flow', '流程'], ['entry', '录入'], ['scores', '计分'], ['validate', '校验']].map(([value, label]) =>
+              [['study', '研究'], ['library', '量表库'], ['flow', '流程'], ['entry', '录入'], ['scores', '计分'], ['validate', '校验']].map(([value, label]) =>
                 h('button', {
                   type: 'button',
                   key: value,
@@ -2379,12 +2657,21 @@ window.__ModuleLoader__.load({
             )
           : null,
         h('div', { className: 'sd-scroll' },
+          stale
+            ? h('div', { className: 'sd-alert sd-alert-bad', role: 'alert' },
+                h('span', null, '研究已变化，请重新连接或先导出草稿。当前页面的研究绑定已过期，写入会被拒绝，自动写入已停住。'),
+                h(Btn, { children: '重新连接研究', kind: 'outline', small: true, onClick: async () => { newPage(); setStale(false); setTab('study'); await load(false) } }))
+            : null,
+          data?.transaction ? h('div', { className: 'sd-alert sd-alert-bad', role: 'alert' }, '存在未完成事务：' + data.transaction.action + '。恢复会回到写入前快照。', h(Btn, { children: '恢复未完成事务', onClick: async () => { try { await call('recover', {}); await refresh() } catch (error) { toast(error.message, 'bad') } } })) : null,
+          data?.lastWriteError ? h('div', { className: 'sd-alert sd-alert-bad', role: 'alert' }, '上次写入失败：' + data.lastWriteError.message + '；恢复状态：' + data.lastWriteError.recovery + '。刷新核对后重试。') : null,
           error
             ? h('div', { className: 'sd-alert sd-alert-bad' }, '面板加载失败：' + error + '（检查插件是否启用，或点「刷新」）')
             : null,
           !data
-            ? h(Empty, { title: '正在读 _lab…' }, '第一次打开会把量表定义与施测流程播种到 _lab/scales。')
-            : tab === 'library'
+            ? h(Empty, { title: '正在读取研究…' }, '状态查询不创建文件。')
+            : tab === 'study'
+              ? h(StudyTab, { data, toast, refresh })
+              : tab === 'library'
               ? h(LibraryTab, { data, toast, refresh, onOpenFolder: openFolder })
               : tab === 'flow'
                 ? h(FlowTab, { data, onOpenScale: openScale })
@@ -2444,12 +2731,13 @@ window.__ModuleLoader__.load({
           const text = String((this.state.error && (this.state.error.stack || this.state.error.message)) || this.state.error)
           return h('div', {
             style: {
-              padding: '18px',
-              fontFamily: 'ui-monospace,Consolas,monospace',
-              fontSize: '12px',
-              lineHeight: 1.6,
+              padding: '22px',
+              fontFamily: 'Cambria,"Noto Serif SC","Source Han Serif SC","Songti SC",STSong,SimSun,serif',
+              fontSize: '13.5px',
+              lineHeight: 1.7,
               whiteSpace: 'pre-wrap',
-              color: '#b00020',
+              color: '#9b3a2c',
+              background: '#f5f4ef',
               overflow: 'auto',
               height: '100%',
               boxSizing: 'border-box'

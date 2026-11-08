@@ -12,6 +12,13 @@
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { loadStudyContext, validateStudyDefinition } from './study-context.mjs'
+import { atomic, hash, definitionSnapshot, publishGeneration } from './persistence.mjs'
+import { hostBinding, bindingStatus, BindingError } from '../research-core/host.mjs'
+import { openResearchData } from '../research-core/data.mjs'
+import { openFlow } from '../research-core/flow.mjs'
+import { readFileSync } from 'node:fs'
+import { beginMutation, mutationState, rollbackMutation, finishMutation, failMutation, recoverMutation } from './mutation-journal.mjs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +27,7 @@ import {
   applyImport,
   buildDetail,
   buildScores,
+  confirmImportMapping,
   detailCsv,
   guessTarget,
   headerCode,
@@ -37,21 +45,36 @@ import {
   subjectScoreText,
   validateData,
   validateDefinition,
+  validateRawDefinition,
   wideCsv
 } from './scoring.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const PKG_DEFS = path.join(HERE, 'defs')
-const PKG_FLOW = path.join(HERE, 'flow.json')
+const SAMPLE_DEF = path.join(HERE, 'sample-def.json')
 const ROUTE = '/api/scale-desk'
+/** 编号列兜底：自动识别的编号列拿不到合格编号时，找一列值符合研究编号规则的重试。 */
+function resolveImport(cfg, def, wave, table, mapping) {
+  const attempt = applyImport(def, wave, table, mapping)
+  const ok = attempt.rows.filter(row => cfg.study.acceptsId(row.id))
+  if (ok.length) return { mapping, applied: attempt, valid: ok, skipped: attempt.rows.length - ok.length }
+  const header = (table[0] || []).map(value => String(value ?? '').trim())
+  for (let index = 0; index < header.length; index += 1) {
+    if (index === mapping.idIndex) continue
+    const values = table.slice(1).map(row => String(row[index] ?? '').trim()).filter(Boolean)
+    if (!values.length) continue
+    const hits = values.filter(value => cfg.study.acceptsId(value)).length
+    if (hits < Math.max(1, Math.ceil(values.length * 0.5))) continue
+    const retry = applyImport(def, wave, table, { ...mapping, idIndex: index, idColumn: header[index], idHow: 'values' })
+    const retryOk = retry.rows.filter(row => cfg.study.acceptsId(row.id))
+    if (retryOk.length) return { mapping: { ...mapping, idIndex: index, idColumn: header[index], idHow: 'values' }, applied: retry, valid: retryOk, skipped: retry.rows.length - retryOk.length }
+  }
+  return { mapping, applied: attempt, valid: ok, skipped: attempt.rows.length - ok.length }
+}
 const HEADER = 'x-scale-desk'
 const MAX_BODY = 8 * 1024 * 1024
 const MAX_ISSUES = 300
 
-const DEFAULTS = {
-  projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文',
-  pythonPath: 'C:/Users/16787/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe'
-}
+
 
 const KIND_LABEL = { scale: '量表', task: '任务', paper: '纸质', demo: '人口学', audio: '音频', text: '书写', survey: '问卷', rest: '练习' }
 
@@ -151,10 +174,17 @@ async function readJson(file, fallback) {
 }
 
 async function writeFileAtomic(file, text) {
-  await mkdir(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  await writeFile(tmp, text, 'utf8')
-  await rename(tmp, file)
+  return atomic(file, text)
+}
+
+/** 新建文件用 wx：并发创建同一个研究定义时宁可报冲突，也不静默覆盖。 */
+async function writeFileExclusive(file, text) {
+  try {
+    await writeFile(file, text, { encoding: 'utf8', flag: 'wx' })
+  } catch (error) {
+    if (error.code === 'EEXIST') throw new BindingError('binding_conflict', '研究文件在保存时已被其他操作创建，请重新预览')
+    throw error
+  }
 }
 
 async function listFiles(dir, suffix) {
@@ -279,114 +309,30 @@ function detectLabelRow(table) {
   return row
 }
 
-/**
- * Remember the codes a fallback match discovered, so the next import of the
- * same survey needs no guessing. Only writes when every item has a bracketed
- * export code.
- */
-async function learnCodes(cfg, def, wave, mapping) {
-  const columns = mapping.items.map(item => item.column)
-  if (columns.some(column => !column || !/^\[[^\]]+\]/.test(String(column)))) return null
-  const codes = columns.map(column => headerCode(column))
-  const file = path.join(cfg.defsDir, `${def.id}.json`)
-  let raw
-  try {
-    raw = JSON.parse(await readFile(file, 'utf8'))
-  } catch {
-    return null
-  }
-  const before = JSON.stringify((raw.codes || {})[wave] || null)
-  raw.codes = { ...(raw.codes || {}), [wave]: codes }
-  if (JSON.stringify(raw.codes[wave]) === before) return null
-  await writeFileAtomic(file, JSON.stringify(raw, null, 2) + '\n')
-  await appendProvenance(cfg, {
-    action: 'learn-codes',
-    scale: def.id,
-    wave,
-    defVersion: def.version,
-    note: codes.slice(0, 6).join(' / '),
-    rows: codes.length
-  })
-  return codes
-}
-
 /* ------------------------------------------------------------------ *
  * config
  * ------------------------------------------------------------------ */
 
 function resolveConfig(config = {}) {
-  const root = path.resolve(String(config.projectRoot || DEFAULTS.projectRoot).replace(/\\/g, '/'))
-  const join = (...parts) => path.join(root, ...parts).replace(/\\/g, '/')
-  const labDir = path.resolve(String(config.labDir || join('_lab')).replace(/\\/g, '/'))
-  const scalesDir = config.scalesDir || path.join(labDir, 'scales').replace(/\\/g, '/')
+  const study = loadStudyContext(config, { pluginKey: 'scales' })
+  const plugin = { ...study.plugin, ...config }
+  const root = path.resolve(plugin.projectRoot || process.cwd())
+  const labDir = path.resolve(plugin.labDir || study.dataRoot)
+  const scalesDir = path.resolve(plugin.scalesDir || path.join(labDir, 'scales'))
   return {
-    projectRoot: root,
-    labDir,
-    scalesDir,
-    defsDir: path.join(scalesDir, 'defs').replace(/\\/g, '/'),
-    answersDir: path.join(scalesDir, 'answers').replace(/\\/g, '/'),
-    importsPath: path.join(scalesDir, 'imports.json').replace(/\\/g, '/'),
-    scoresPath: path.join(labDir, 'scores.csv').replace(/\\/g, '/'),
-    detailPath: path.join(labDir, 'scores_detail.csv').replace(/\\/g, '/'),
-    widePath: path.join(labDir, 'data_wide.csv').replace(/\\/g, '/'),
-    exportDir: path.join(labDir, 'export').replace(/\\/g, '/'),
-    flowPath: path.join(scalesDir, 'flow.json').replace(/\\/g, '/'),
-    subjectsPath: String(config.subjectsPath || join('_lab', 'subjects.csv')).replace(/\\/g, '/'),
-    pythonPath: path.resolve(String(config.pythonPath || DEFAULTS.pythonPath).replace(/\\/g, '/')),
-    xlsxScript: path.join(HERE, 'xlsx_dump.py')
+    study, projectRoot: root, labDir, scalesDir,
+    defsDir: path.join(scalesDir, 'defs'), answersDir: path.join(scalesDir, 'answers'),
+    importsPath: path.join(scalesDir, 'imports.json'), flowPath: path.join(scalesDir, 'flow.json'),
+    scoresPath: path.join(labDir, 'scores.csv'), detailPath: path.join(labDir, 'scores_detail.csv'),
+    widePath: path.join(labDir, 'data_wide.csv'), exportDir: path.join(labDir, 'export'),
+    subjectsPath: plugin.subjectsPath || study.participants.path || path.join(labDir, 'subjects.csv'),
+    pythonPath: plugin.pythonPath || process.env.DSH_PYTHON_PATH || 'python', xlsxScript: path.join(HERE, 'xlsx_dump.py')
   }
 }
 
 /* ------------------------------------------------------------------ *
  * definitions + answers
  * ------------------------------------------------------------------ */
-
-/** First run: copy the shipped definitions and the protocol flow into _lab. */
-async function ensureSeeded(cfg) {
-  await mkdir(cfg.defsDir, { recursive: true })
-  await mkdir(cfg.answersDir, { recursive: true })
-  const existing = await listFiles(cfg.defsDir, '.json')
-  const shipped = existing.length ? [] : await listFiles(PKG_DEFS, '.json')
-  for (const name of shipped) {
-    await copyFile(path.join(PKG_DEFS, name), path.join(cfg.defsDir, name))
-  }
-  const hasFlow = await stat(cfg.flowPath).then(() => true).catch(() => false)
-  if (!hasFlow) {
-    await copyFile(PKG_FLOW, cfg.flowPath)
-    shipped.push('flow.json')
-  }
-  // A definition that the protocol or an answer file still points at must not
-  // vanish silently (it happened three times: SUPPORT/ADVERSE/DISCOMFORT).
-  const present = new Set(existing.map(name => name.replace(/\.json$/i, '')))
-  const wanted = new Set()
-  const flow = await readJson(cfg.flowPath, { stages: [] })
-  for (const stage of Array.isArray(flow.stages) ? flow.stages : []) {
-    for (const step of Array.isArray(stage && stage.steps) ? stage.steps : []) {
-      if (step && step.kind === 'scale' && step.scale) wanted.add(String(step.scale))
-    }
-  }
-  const answerFiles = await readdir(cfg.answersDir).catch(() => [])
-  for (const name of answerFiles) {
-    const match = /^(.+)__[^_]+\.csv$/i.exec(name)
-    if (match) wanted.add(match[1])
-  }
-  let restored = 0
-  for (const id of wanted) {
-    if (present.has(id)) continue
-    const source = path.join(PKG_DEFS, `${id}.json`)
-    const exists = await stat(source).then(() => true).catch(() => false)
-    if (!exists) continue
-    await copyFile(source, path.join(cfg.defsDir, `${id}.json`))
-    await appendProvenance(cfg, { action: 'reseed-def', scale: id, note: '定义缺失，已从插件包补回' }).catch(() => {})
-    restored += 1
-  }
-  if (shipped.length || restored) {
-    const readme = path.join(cfg.scalesDir, 'README.md')
-    const hasReadme = await stat(readme).then(() => true).catch(() => false)
-    if (!hasReadme) await writeFile(readme, LAB_README, 'utf8')
-  }
-  return shipped.length + restored
-}
 
 /** The protocol: ordered stages, each with ordered steps. */
 async function loadFlow(cfg, defs) {
@@ -449,7 +395,12 @@ async function loadDefs(cfg) {
     const file = path.join(cfg.defsDir, name)
     try {
       const raw = JSON.parse(await readFile(file, 'utf8'))
+      const rawIssues = validateRawDefinition(raw)
+      if (rawIssues.length) { problems.push(...rawIssues.map(item => ({ ...item, scale: raw.id || name, file }))); continue }
       const def = normalizeDef(raw, name.replace(/\.json$/, ''))
+      const semantic = validateDefinition(def).filter(item => item.level === 'bad')
+      if (semantic.length) { problems.push(...semantic.map(item => ({ ...item, scale: raw.id, file }))); continue }
+      def.definitionHash = hash(JSON.stringify(raw))
       def.file = file.replace(/\\/g, '/')
       def.mtime = (await stat(file)).mtimeMs
       defs.push(def)
@@ -487,7 +438,7 @@ function parseAnswerFile(name, text) {
       const text2 = String(cells[at] ?? '').trim()
       if (text2) values[no] = text2
     })
-    rows.push({ id, values })
+    rows.push({ id, values, definitionHash: header.includes('definitionHash') ? cells[header.indexOf('definitionHash')] || '' : '', submissionId: header.includes('submissionId') ? cells[header.indexOf('submissionId')] || '' : '' })
   }
   return { name, scale: match[1], wave: match[2], header, rows, notes }
 }
@@ -519,11 +470,11 @@ async function writeAnswerFile(cfg, scale, wave, rows, itemCount = 0) {
     return
   }
   const width = Math.max(2, String(items).length)
-  const header = ['编号', ...Array.from({ length: items }, (_, i) => `q${String(i + 1).padStart(width, '0')}`)]
+  const header = ['编号', 'definitionHash', 'submissionId', ...Array.from({ length: items }, (_, i) => `q${String(i + 1).padStart(width, '0')}`)]
   const body = rows
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map(row => [row.id, ...Array.from({ length: items }, (_, i) => row.values?.[i + 1] ?? '')])
+    .map(row => [row.id, row.definitionHash || '', row.submissionId || randomUUID(), ...Array.from({ length: items }, (_, i) => row.values?.[i + 1] ?? '')])
   const csv = [header, ...body].map(line => line.map(cellText).join(',')).join('\r\n') + '\r\n'
   await writeFileAtomic(path.join(cfg.answersDir, answerFileName(scale, wave)), csv)
 }
@@ -540,11 +491,11 @@ function cellText(value) {
  */
 function mergeAnswerRows(existing, incoming, mode) {
   const canonical = values => JSON.stringify(Object.keys(values || {}).sort().map(no => [no, values[no]]))
-  const rows = mode === 'replace' ? [] : existing.map(row => ({ id: row.id, values: row.values }))
+  const rows = mode === 'replace' ? [] : existing.map(row => ({ ...row }))
   for (const row of incoming) {
     const same = rows.findIndex(existingRow => existingRow.id === row.id && canonical(existingRow.values) === canonical(row.values))
-    if (same >= 0) rows[same] = { id: row.id, values: row.values }
-    else rows.push({ id: row.id, values: row.values })
+    if (same >= 0) rows[same] = { ...row }
+    else rows.push({ ...row })
   }
   return rows
 }
@@ -567,10 +518,10 @@ async function readSubjectIds(cfg) {
     const table = parseTable(text)
     if (table.length) {
       const header = table[0].map(value => String(value ?? '').trim())
-      const idAt = Math.max(0, header.findIndex(value => /编号|participant/i.test(value)))
+      const idAt = cfg.study.participants.idColumn ? header.indexOf(cfg.study.participants.idColumn) : Math.max(0, header.findIndex(value => /编号|participant/i.test(value)))
       for (const cells of table.slice(1)) {
         const id = normalizeId(cells[idAt])
-        if (isValidId(id)) fromFile.push(id)
+        if (cfg.study.acceptsId(id)) fromFile.push(id)
       }
     }
   }
@@ -581,8 +532,8 @@ async function readSubjectIds(cfg) {
  * model
  * ------------------------------------------------------------------ */
 
-async function buildModel(cfg, { seed = true } = {}) {
-  const seeded = seed ? await ensureSeeded(cfg) : 0
+async function buildModel(cfg) {
+  const seeded = 0
   const { defs, problems: defProblems } = await loadDefs(cfg)
   const flow = await loadFlow(cfg, defs)
   const { files: answerFiles, problems: answerProblems } = await loadAnswerFiles(cfg)
@@ -591,7 +542,7 @@ async function buildModel(cfg, { seed = true } = {}) {
     scale: file.scale,
     wave: file.wave,
     id: row.id,
-    values: row.values
+    values: row.values, definitionHash: row.definitionHash, submissionId: row.submissionId
   })))
   const subjects = await readSubjectIds(cfg)
   const subjectIds = [...new Set([...subjects.ids, ...answerRows.map(row => row.id)])]
@@ -605,17 +556,9 @@ async function buildModel(cfg, { seed = true } = {}) {
   const scoresStat = await stat(cfg.scoresPath).then(value => value.mtimeMs).catch(() => 0)
   const newestAnswer = answerFiles.reduce((max, file) => Math.max(max, file.mtime || 0), 0)
   const newestDef = defs.reduce((max, def) => Math.max(max, def.mtime || 0), 0)
-  const stale = !scoresStat || scoresStat + 1000 < Math.max(newestAnswer, newestDef)
-
-  // First run: leave a header-only scores.csv behind so the run console and the
-  // analysis pipeline have their contract file before anyone answers anything.
-  if (!scoresStat) {
-    try {
-      await writeScores({ defs, scores, detail }, cfg)
-    } catch (error) {
-      console.error('[scale-desk] 初始化 scores.csv 失败：', error)
-    }
-  }
+  const revision = hash(JSON.stringify({ definitions: defs.map(def => [def.id, def.definitionHash]), answerRows, subjects: subjectIds }))
+  const manifest = await readJson(path.join(cfg.labDir, 'scores-manifest.json'), null)
+  const stale = !scoresStat || (manifest ? manifest.inputRevision !== revision : scoresStat + 1000 < Math.max(newestAnswer, newestDef))
 
   return {
     seeded,
@@ -627,8 +570,9 @@ async function buildModel(cfg, { seed = true } = {}) {
     scores,
     detail,
     issues,
+    revision,
     subjectSource: subjects.source,
-    stale: scoresStat ? stale : false,
+    stale: Boolean(answerRows.length || defs.length) && stale,
     counts: {
       issueBad: issues.filter(item => item.level === 'bad').length,
       issueWarn: issues.filter(item => item.level === 'warn').length,
@@ -645,6 +589,7 @@ function instrumentPayload(model, def) {
     name: def.name,
     short: def.short,
     version: def.version,
+    definitionHash: def.definitionHash,
     itemCount: def.itemCount,
     waves: def.waves,
     response: def.response,
@@ -693,6 +638,9 @@ function statusPayload(model, cfg) {
   const totalRows = instruments.reduce((sum, item) => sum + Object.values(item.data).reduce((s, d) => s + d.rows, 0), 0)
   return {
     today: todayString(),
+    study: cfg.study.identity,
+    visits: cfg.study.visits,
+    revision: model.revision,
     labDir: cfg.labDir,
     scalesDir: cfg.scalesDir,
     subjectsPath: cfg.subjectsPath,
@@ -729,10 +677,11 @@ async function writeScores(model, cfg) {
   const csv = scoresCsv(model.defs, model.scores)
   const detail = detailCsv(model.detail)
   const wide = wideCsv(model.defs, model.scores, model.answerRows)
-  await writeFileAtomic(cfg.scoresPath, csv)
-  await writeFileAtomic(cfg.detailPath, detail)
-  await writeFileAtomic(cfg.widePath, wide)
+  const inputs = { 'inputs/answer-rows.json': JSON.stringify(model.answerRows, null, 2), 'inputs/subjects.json': JSON.stringify(model.scores.rows.map(row => row.id)), 'inputs/study.json': JSON.stringify(cfg.study.identity), 'inputs/scoring.js': await readFile(path.join(HERE, 'scoring.js'), 'utf8') }
+  for (const def of model.defs) inputs['inputs/defs/' + def.id + '.json'] = await readFile(def.file, 'utf8')
+  const manifest = await publishGeneration(cfg, { 'scores.csv': csv, 'scores_detail.csv': detail, 'data_wide.csv': wide, ...inputs }, { inputRevision: model.revision, definitions: model.defs.map(def => ({ id: def.id, hash: def.definitionHash })) })
   return {
+    generation: manifest.generation,
     rows: model.scores.rows.length,
     columns: model.scores.columns.length,
     detailRows: model.detail.length,
@@ -783,7 +732,13 @@ async function exportReport(model, cfg) {
  * ------------------------------------------------------------------ */
 
 export function apply(ctx, config = {}) {
-  const cfg = resolveConfig(config || {})
+  let cfg = resolveConfig(config || {})
+  let activeConfig = { ...config }
+  let writeQueue = Promise.resolve()
+  let lastWriteError = null
+  let pendingWrites = 0
+  let activeReads = 0
+  let cacheEpoch = 0
   let modelCache = null
   let modelAt = 0
   let building = null
@@ -791,20 +746,23 @@ export function apply(ctx, config = {}) {
 
   async function model(force = false) {
     if (!force && modelCache && Date.now() - modelAt < CACHE_TTL_MS) return modelCache
-    if (building) return building
-    building = (async () => {
+    const epoch = cacheEpoch
+    const context = cfg
+    if (building && building.epoch === epoch) return building.promise
+    const entry = { epoch, promise: null }
+    entry.promise = (async () => {
       try {
-        modelCache = await buildModel(cfg)
-        modelAt = Date.now()
-        return modelCache
-      } finally {
-        building = null
-      }
+        const result = await buildModel(context)
+        if (epoch === cacheEpoch && cfg === context) { modelCache = result; modelAt = Date.now() }
+        return result
+      } finally { if (building === entry) building = null }
     })()
-    return building
+    building = entry
+    return entry.promise
   }
 
   function invalidate() {
+    cacheEpoch += 1
     modelCache = null
     modelAt = 0
   }
@@ -815,13 +773,9 @@ export function apply(ctx, config = {}) {
    * instead of making the user remember to press 重算.
    */
   async function syncScores() {
-    try {
-      const current = await model(true)
-      await writeScores(current, cfg)
-      modelAt = Date.now()
-    } catch (error) {
-      console.error('[scale-desk] 写 scores.csv 失败：', error)
-    }
+    const current = await model(true)
+    await writeScores(current, cfg)
+    modelAt = Date.now()
   }
 
   function findDef(current, id) {
@@ -836,20 +790,117 @@ export function apply(ctx, config = {}) {
 
   function requireId(id) {
     const clean = normalizeId(id)
-    if (!isValidId(clean)) throw new RouteError('invalid', '被试编号应为 5 位分组编号（如 11002）')
+    if (!cfg.study.acceptsId(clean)) throw new RouteError('invalid', '被试编号不符合研究规则（需非空且匹配pattern）')
     return clean
   }
 
+  const binding = hostBinding(ctx, {
+    plugin: 'scale-desk',
+    version: '0.2.0',
+    config,
+    hooks: {
+      // 未配置研究时的默认根，与核心的 emptyDescriptor 用同一个基准，避免无谓切换。
+      emptyBase: () => path.resolve(config.projectRoot || process.cwd()),
+      loadStudy(studyPath) {
+        return resolveConfig({ studyPath, pythonPath: activeConfig.pythonPath }).study
+      },
+      currentIdentity() {
+        // 空研究（尚未显式连接）时数据根与核心的默认根对齐，避免无谓切换；
+        // 业务读写仍用 cfg.labDir，所以配置了 labDir 也不会被覆盖。
+        const dataRoot = cfg.study.path ? cfg.labDir : path.resolve(config.projectRoot || process.cwd(), '_lab')
+        return { studyId: cfg.study.id, studyPath: cfg.study.path, dataRoot, revision: cfg.study.revision }
+      },
+      prepareSwitch(studyPath) {
+        if (activeReads || building || pendingWrites > 0) throw new RouteError('busy', '量表正在写入，请稍后切换')
+        const nextConfig = { studyPath, pythonPath: activeConfig.pythonPath }
+        const next = resolveConfig(nextConfig)
+        const marker = path.join(next.labDir, '.scale-study.json')
+        try { const owner = JSON.parse(readFileSync(marker, 'utf8')); if (owner.studyId !== next.study.id) throw new RouteError('study_mismatch', '目标数据目录属于其他研究') } catch (error) { if (error.code !== 'ENOENT') throw error }
+        const previous = { cfg, activeConfig }
+        return {
+          commit() { cfg = next; activeConfig = nextConfig; invalidate() },
+          rollback() { cfg = previous.cfg; activeConfig = previous.activeConfig; invalidate() }
+        }
+      },
+      busy() {
+        return activeReads > 0 || Boolean(building) || pendingWrites > 0
+      }
+    }
+  })
+  binding.dispatch(ctx)
+
   const actions = {
+    async studyConfig() {
+      return { study: cfg.study.identity, definition: cfg.study.path ? JSON.parse(await readFile(cfg.study.path, 'utf8')) : { schemaVersion: 1, studyId: cfg.study.id, name: cfg.study.name, dataRoot: cfg.labDir, participantId: {}, visits: [], tasks: [], followups: [], plugins: {} } }
+    },
+    async studyPreview(payload) {
+      let definition
+      try { definition = typeof payload.definition === 'string' ? JSON.parse(payload.definition) : payload.definition } catch { throw new RouteError('invalid', '研究JSON无法解析') }
+      const problems = validateStudyDefinition(definition)
+      return { valid: problems.length === 0, problems, definition, path: payload.path ? path.resolve(payload.path) : null }
+    },
+    async studyConnect(payload, actor) {
+      const requested = String((payload && payload.path) || '').trim()
+      if (!requested) throw new RouteError('invalid', '请填写研究定义路径')
+      // 连接前先按旧行为核对目标数据目录归属，避免写入一条指向别的研究的绑定。
+      const next = resolveConfig({ studyPath: path.resolve(requested), pythonPath: activeConfig.pythonPath })
+      const marker = path.join(next.labDir, '.scale-study.json')
+      try { const owner = JSON.parse(readFileSync(marker, 'utf8')); if (owner.studyId !== next.study.id) throw new RouteError('study_mismatch', '目标数据目录属于其他研究') } catch (error) { if (error.code !== 'ENOENT') throw error }
+      // 显式连接：只改当前页面/会话的绑定，并把绑定修订号 +1（旧令牌随即失效）。
+      binding.connect(actor, { studyPath: path.resolve(requested) })
+      const active = await binding.activate(actor)
+      return { study: cfg.study.identity, binding: active }
+    },
+    async studySave(payload, actor) {
+      const preview = await actions.studyPreview(payload)
+      if (!preview.valid || !preview.path) throw new RouteError('invalid', preview.problems.join('；') || '请填写研究文件路径')
+      const existing = await readFile(preview.path, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error })
+      if (existing !== null && (!payload.expectedRevision || hash(existing) !== payload.expectedRevision)) throw new RouteError('conflict', '研究文件已存在或已更改，请重新连接并预览')
+      const dataRoot = path.resolve(path.dirname(preview.path), preview.definition.dataRoot || './data')
+      if (dataRoot === cfg.labDir && preview.definition.studyId !== cfg.study.id) throw new RouteError('study_mismatch', '新研究ID需使用独立数据目录')
+      const owner = await readJson(path.join(dataRoot, '.scale-study.json'), null)
+      if (owner && owner.studyId !== preview.definition.studyId) throw new RouteError('study_mismatch', '目标数据目录属于其他研究')
+      const savedText = JSON.stringify(preview.definition, null, 2) + '\n'
+      // 新文件用 wx 语义（并发创建时报冲突而不是覆盖）；已有文件写入前再核对一次内容。
+      if (existing === null) await writeFileExclusive(preview.path, savedText)
+      else {
+        const now = await readFile(preview.path, 'utf8').catch(() => null)
+        if (now !== existing) throw new RouteError('conflict', '研究文件在保存前被外部修改，请重新预览')
+        await writeFileAtomic(preview.path, savedText)
+      }
+      try { binding.connect(actor, { studyPath: preview.path }) }
+      catch (error) {
+        const now = await readFile(preview.path, 'utf8').catch(() => null)
+        if (now === savedText) {
+          if (existing === null) await rm(preview.path, { force: true })
+          else await writeFileAtomic(preview.path, existing)
+        } else throw new RouteError('partial', '研究连接失败且文件被外部修改，未回滚；请重新连接核对：' + error.message)
+        throw error
+      }
+      // 绑定记录已落盘：激活失败不回滚研究定义，下次读取会重新切换过去。
+      const active = await binding.activate(actor)
+      return { study: cfg.study.identity, binding: active }
+    },
+    async recover() { const result = await recoverMutation(cfg); invalidate(); return result },
+    async initialize(payload) {
+      await mkdir(cfg.defsDir, { recursive: true }); await mkdir(cfg.answersDir, { recursive: true })
+      if (payload.sample === true) {
+        const raw = JSON.parse(await readFile(SAMPLE_DEF, 'utf8'))
+        const target = path.join(cfg.defsDir, raw.id + '.json')
+        if (await stat(target).then(() => true).catch(() => false)) throw new RouteError('conflict', '示例定义已存在')
+        await writeFileAtomic(target, JSON.stringify(raw, null, 2) + '\n')
+      }
+      invalidate(); return { study: cfg.study.identity, sample: payload.sample === true }
+    },
     async status() {
       const current = await model(false)
-      return statusPayload(current, cfg)
+      return { ...statusPayload(current, cfg), transaction: await mutationState(cfg), lastWriteError }
     },
 
     async refresh() {
       invalidate()
       const current = await model(true)
-      return statusPayload(current, cfg)
+      return { ...statusPayload(current, cfg), lastWriteError }
     },
 
     async definition(payload) {
@@ -860,6 +911,7 @@ export function apply(ctx, config = {}) {
         name: def.name,
         short: def.short,
         version: def.version,
+        definitionHash: def.definitionHash,
         response: def.response,
         items: def.items,
         codes: def.codes,
@@ -936,6 +988,9 @@ export function apply(ctx, config = {}) {
           text: texts.has(Number(item.no)) ? texts.get(Number(item.no)) : String(item.text || '')
         }))
       // Keep the file readable for whoever opens it next.
+      const rawIssues = validateRawDefinition(raw)
+      if (rawIssues.length) throw new RouteError('invalid', rawIssues.map(item => item.text).join('；'))
+      await definitionSnapshot(cfg, JSON.parse(await readFile(def.file, 'utf8')))
       await writeFileAtomic(def.file, JSON.stringify(raw, null, 2) + '\n')
       invalidate()
       return {
@@ -956,7 +1011,7 @@ export function apply(ctx, config = {}) {
       const def = findDef(current, String(payload && payload.scale))
       const incoming = Array.isArray(payload && payload.waves) ? payload.waves : []
       const names = []
-      const codes = {}
+      const codes = { ...def.codes }
       for (const entry of incoming) {
         const name = String((entry && entry.name) || '').trim()
         if (!name) throw new RouteError('invalid', '波次名不能为空')
@@ -966,6 +1021,7 @@ export function apply(ctx, config = {}) {
         if (names.includes(name)) throw new RouteError('invalid', `波次名 ${name} 重复`)
         names.push(name)
         const prefix = String((entry && entry.prefix) || '').trim()
+        if ((def.codes[name] || []).length) continue
         if (!prefix) continue
         if (!/^[A-Za-z0-9._-]{1,40}$/.test(prefix)) {
           throw new RouteError('invalid', `导出码前缀「${prefix}」只能用字母、数字和 . _ -`)
@@ -984,7 +1040,10 @@ export function apply(ctx, config = {}) {
 
       const raw = JSON.parse(await readFile(def.file, 'utf8'))
       raw.waves = names
-      raw.codes = codes
+      raw.codes = Object.fromEntries(Object.entries(codes).filter(([wave]) => names.includes(wave)))
+      const rawIssues = validateRawDefinition(raw)
+      if (rawIssues.length) throw new RouteError('invalid', rawIssues.map(item => item.text).join('；'))
+      await definitionSnapshot(cfg, JSON.parse(await readFile(def.file, 'utf8')))
       await writeFileAtomic(def.file, JSON.stringify(raw, null, 2) + '\n')
       invalidate()
       await syncScores()
@@ -998,7 +1057,9 @@ export function apply(ctx, config = {}) {
       requireWave(def, wave)
       const id = requireId(payload && payload.id)
       const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
-      const row = file ? file.rows.find(item => item.id === id) : undefined
+      const entries = file ? file.rows.filter(item => item.id === id) : []
+      if (entries.length > 1) throw new RouteError('duplicate', '同编号有多份作答，请先在核对里保留一份')
+      const row = entries[0]
       return { id, scale: def.id, wave, exists: Boolean(row), values: row ? row.values : {} }
     },
 
@@ -1010,11 +1071,14 @@ export function apply(ctx, config = {}) {
       requireWave(def, wave)
       const id = requireId(payload && payload.id)
       const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
-      const row = file ? file.rows.find(item => item.id === id) : undefined
+      const entries = file ? file.rows.filter(item => item.id === id) : []
+      if (entries.length > 1) return { id, scale: def.id, scaleName: def.name, short: def.short, wave, status: 'duplicate', copies: entries.length, items: [], subs: [], answered: null, file: file.file }
+      const row = entries[0]
       if (!row) throw new RouteError('not_found', `${id} 没有 ${def.short} ${wave} 的作答`)
       const result = scoreAnswers(def, row.values)
       return {
         id,
+        status: result.status,
         scale: def.id,
         scaleName: def.name,
         short: def.short,
@@ -1048,7 +1112,8 @@ export function apply(ctx, config = {}) {
       }
       const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
       const rows = file ? file.rows.filter(row => row.id !== id) : []
-      rows.push({ id, values })
+      const definitionHash = await definitionSnapshot(cfg, JSON.parse(await readFile(def.file, 'utf8')))
+      rows.push({ id, values, definitionHash, submissionId: randomUUID() })
       await writeAnswerFile(cfg, def.id, wave, rows, def.itemCount)
       await appendProvenance(cfg, {
         action: 'manual',
@@ -1117,12 +1182,12 @@ export function apply(ctx, config = {}) {
       const index = Number(payload && payload.index)
       if (!Number.isInteger(index) || index < 0 || index >= file.rows.length) throw new RouteError('invalid', '找不到这一行')
       const to = normalizeId(payload && payload.to)
-      if (!isValidId(to)) throw new RouteError('invalid', '新编号应为 5 位分组编号（如 11002）')
+      if (!cfg.study.acceptsId(to)) throw new RouteError('invalid', '新编号不能为空')
       if (file.rows.some((row, at) => at !== index && row.id === to)) {
         throw new RouteError('invalid', `${to} 已经有作答，先把那份删掉或改成别的编号`)
       }
       const from = file.rows[index].id
-      const rows = file.rows.map((row, at) => (at === index ? { id: to, values: row.values } : row))
+      const rows = file.rows.map((row, at) => (at === index ? { ...row, id: to } : row))
       await writeAnswerFile(cfg, def.id, wave, rows, def.itemCount)
       await appendProvenance(cfg, { action: 'rename', scale: def.id, wave, defVersion: def.version, note: `${from}→${to}` })
       await syncScores()
@@ -1178,7 +1243,7 @@ export function apply(ctx, config = {}) {
         for (const row of file.rows) counts.set(row.id, (counts.get(row.id) || 0) + 1)
         for (const row of file.rows) {
           const reasons = []
-          if (!isValidId(row.id)) reasons.push('编号不是 5 位')
+          if (!cfg.study.acceptsId(row.id)) reasons.push('编号为空')
           if ((counts.get(row.id) || 0) > 1) reasons.push('同编号 ' + counts.get(row.id) + ' 份')
           if (!reasons.length) continue
           entries.push({
@@ -1258,7 +1323,7 @@ export function apply(ctx, config = {}) {
     async bulkRenameSubjects(payload) {
       const current = await model(false)
       const from = normalizeId(payload && payload.from)
-      const to = normalizeId(payload && payload.to)
+      const to = requireId(payload && payload.to)
       if (!from) throw new RouteError('invalid', '先填旧编号')
       if (!to) throw new RouteError('invalid', '先填新编号')
       if (from === to) throw new RouteError('invalid', '新旧编号一样，不用改')
@@ -1273,7 +1338,7 @@ export function apply(ctx, config = {}) {
         let fileRenamed = 0
         let fileMerged = 0
         for (const row of file.rows) {
-          const next = row.id === from ? { id: to, values: row.values } : row
+          const next = row.id === from ? { ...row, id: to } : row
           if (row.id === from) fileRenamed += 1
           const key = next.id + '|' + JSON.stringify(next.values)
           if (seen.has(key)) {
@@ -1304,7 +1369,7 @@ export function apply(ctx, config = {}) {
         merged,
         touched,
         collision,
-        warning: isValidId(to) ? null : `新编号「${to}」不是 5 位编号，后续校验仍会标出来`
+        warning: null
       }
     },
 
@@ -1497,32 +1562,31 @@ export function apply(ctx, config = {}) {
         throw new RouteError('invalid', `${def.short} 是多分量表（${Object.values(def.scoring.subscales).map(sub => sub.label).join('/')}），计分键请在定义 JSON 里改`)
       }
       if (wantsScoring) {
-        const scoringType = ['none', 'sum', 'mean'].includes(payload.scoringType) ? payload.scoringType : def.scoring.type
-        const reverse = Array.isArray(payload.reverse)
-          ? [...new Set(payload.reverse.map(Number).filter(no => Number.isInteger(no) && no >= 1 && no <= def.itemCount))].sort((a, b) => a - b)
-          : def.items.filter(item => item.reverse).map(item => item.no)
-        raw.items = (Array.isArray(raw.items) ? raw.items : def.items).map(item => ({ ...item, reverse: reverse.includes(Number(item.no)) }))
-        const minAnswered = Number(payload.minAnswered) > 0
-          ? Math.min(def.itemCount, Math.round(Number(payload.minAnswered)))
-          : raw.missing && Number(raw.missing.minAnswered) > 0 ? Number(raw.missing.minAnswered) : def.missing.minAnswered
-        raw.missing = { ...(raw.missing || {}), minAnswered }
-        raw.scoring = scoringType === 'none'
-          ? { type: 'none' }
-          : {
-              type: scoringType,
-              subscales: {
-                total: {
-                  label: '总分',
-                  items: def.items.map(item => item.no),
-                  reverse,
-                  range: scoringType === 'sum'
-                    ? [def.response.min * def.itemCount, def.response.max * def.itemCount]
-                    : [def.response.min, def.response.max],
-                  multiplier: 1
-                }
-              }
-            }
+        if (payload.scoringType !== undefined && !['none', 'sum', 'mean'].includes(payload.scoringType)) throw new RouteError('invalid', '计分方式无效')
+        const scoringType = payload.scoringType ?? def.scoring.type
+        const reverse = payload.reverse === undefined ? null : payload.reverse
+        if (reverse !== null && (!Array.isArray(reverse) || reverse.some(no => !Number.isInteger(no) || no < 1 || no > def.itemCount))) throw new RouteError('invalid', '反向题应为有效题号数组')
+        if (payload.minAnswered !== undefined) {
+          if (!Number.isInteger(payload.minAnswered) || payload.minAnswered < 1 || payload.minAnswered > def.itemCount) throw new RouteError('invalid', '缺失门槛超出题量')
+          if (payload.minAnswered !== def.missing.minAnswered) raw.missing = { ...(raw.missing || {}), minAnswered: payload.minAnswered }
+        }
+        if (reverse !== null && JSON.stringify([...new Set(reverse)].sort((a,b) => a-b)) !== JSON.stringify(def.items.filter(item => item.reverse).map(item => item.no))) {
+          raw.items = (raw.items || def.items).map(item => ({ ...item, reverse: reverse.includes(Number(item.no)) }))
+          for (const sub of Object.values(raw.scoring?.subscales || {})) if (Object.hasOwn(sub, 'reverse')) sub.reverse = reverse.filter(no => (sub.items || def.items.map(item => item.no)).includes(no))
+        }
+        if (scoringType !== def.scoring.type) {
+          raw.scoring = { ...(raw.scoring || {}), type: scoringType }
+          // Preserve custom keys, item subsets, weights and extension fields.
+          for (const sub of Object.values(raw.scoring.subscales || {})) {
+            const count = (sub.items || def.items).length
+            const span = scoringType === 'mean' ? 1 : count
+            if (scoringType !== 'none') sub.range = [def.response.min * span * (sub.multiplier ?? 1), def.response.max * span * (sub.multiplier ?? 1)]
+          }
+        }
       }
+      const rawIssues = validateRawDefinition(raw)
+      if (rawIssues.length) throw new RouteError('invalid', rawIssues.map(item => item.text).join('；'))
+      await definitionSnapshot(cfg, JSON.parse(await readFile(def.file, 'utf8')))
       await writeFileAtomic(def.file, JSON.stringify(raw, null, 2) + '\n')
       invalidate()
       await syncScores()
@@ -1547,7 +1611,7 @@ export function apply(ctx, config = {}) {
       const targets = scanTargets(current.defs, header, body, labels)
       if (!scale || !wave) {
         const pool = scale ? current.defs.filter(def => def.id === scale) : current.defs
-        guessed = guessTarget(pool, header, filename, labels)
+        guessed = targets.find(target => target.automatic && pool.some(def => def.id === target.scale)) || guessTarget(pool, header, filename, labels)
         if (!guessed) {
           if (!targets.length) {
             throw new RouteError('invalid', `这份文件的列名对不上任何一份量表（前几列：${header.slice(0, 4).join(' / ')}）。可以手动选择目标量表与波次再预览。`)
@@ -1559,9 +1623,10 @@ export function apply(ctx, config = {}) {
       }
       const def = findDef(current, scale)
       requireWave(def, wave)
-      const mapping = mapImportColumns(def, wave, header, body, labels)
-      if (!mapping.idColumn) throw new RouteError('invalid', '没有找到编号列（列名需含「编号」或 participant）')
-      const applied = applyImport(def, wave, table, mapping)
+      const mapping = confirmImportMapping(def, header, mapImportColumns(def, wave, header, body, labels), payload?.mapping)
+      if (mapping.idIndex < 0) throw new RouteError('invalid', '请选择编号列')
+      const resolved = resolveImport(cfg, def, wave, table, mapping)
+      const applied = resolved.applied
       const preview = applied.rows.slice(0, 5).map(row => {
         const scored = scoreAnswers(def, row.values)
         return {
@@ -1578,18 +1643,22 @@ export function apply(ctx, config = {}) {
         scale: def.id,
         scaleName: def.name,
         wave,
+        requiresTarget: !(payload?.scale && payload?.wave) && !targets.some(target => target.automatic),
         targets: targets.map(target => ({
           scale: target.scale,
           short: target.short,
           name: target.name,
           wave: target.wave,
           matched: target.matched,
-          total: target.total
+          total: target.total,
+          automatic: target.automatic,
+          mapping: target.mapping
         })),
         header,
         mapping: {
-          idColumn: mapping.idColumn,
-          idHow: mapping.idHow,
+          idColumn: resolved.mapping.idColumn,
+          idIndex: resolved.mapping.idIndex,
+          idHow: resolved.mapping.idHow,
           items: mapping.items,
           matched: mapping.matched,
           total: mapping.total,
@@ -1597,6 +1666,7 @@ export function apply(ctx, config = {}) {
           extraColumns: mapping.extraColumns.slice(0, 30)
         },
         rows: applied.rows.length,
+        skipped: resolved.skipped,
         ids: applied.rows.map(row => row.id),
         issues: [...applied.issues].slice(0, 50),
         preview,
@@ -1617,26 +1687,22 @@ export function apply(ctx, config = {}) {
       if (!scale || !wave) {
         const pool = scale ? current.defs.filter(def => def.id === scale) : current.defs
         const guessed = guessTarget(pool, table[0], filename, labels)
-        if (!guessed) throw new RouteError('invalid', '认不出量表与波次，请明确指定')
+        const certain = scanTargets(pool, table[0], table.slice(1), labels).filter(target => target.automatic)
+        if (!guessed || certain.length !== 1 || certain[0].scale !== guessed.scale || certain[0].wave !== guessed.wave) throw new RouteError('invalid', '请明确选择目标量表与波次后导入')
         scale = scale || guessed.scale
         wave = wave || guessed.wave
       }
       const def = findDef(current, scale)
       requireWave(def, wave)
       const header = table[0].map(value => String(value ?? '').trim())
-      let mapping = mapImportColumns(def, wave, header, table.slice(1), labels)
-      const overrides = payload && payload.mapping
-      if (overrides && Array.isArray(overrides.items)) {
-        const byNo = new Map(overrides.items.map(item => [Number(item.no), item.column]))
-        mapping = {
-          ...mapping,
-          items: mapping.items.map(item => (byNo.has(item.no) ? { ...item, column: byNo.get(item.no) || null, how: 'manual' } : item)),
-          idColumn: overrides.idColumn || mapping.idColumn
-        }
-        mapping.matched = mapping.items.filter(item => item.column).length
-      }
-      if (!mapping.idColumn) throw new RouteError('invalid', '没有找到编号列')
-      const applied = applyImport(def, wave, table, mapping)
+      const mapping = confirmImportMapping(def, header, mapImportColumns(def, wave, header, table.slice(1), labels), payload?.mapping)
+      if (mapping.idIndex < 0) throw new RouteError('invalid', '请选择编号列')
+      const resolved = resolveImport(cfg, def, wave, table, mapping)
+      const applied = resolved.applied
+      const skipped = resolved.skipped
+      if (!applied.rows.length) throw new RouteError('invalid', '这份文件没有一行编号符合研究规则（可能都是测试行或未填编号）')
+      const definitionHash = await definitionSnapshot(cfg, JSON.parse(await readFile(def.file, 'utf8')))
+      for (const row of applied.rows) { row.definitionHash = definitionHash; row.submissionId = randomUUID() }
       if (!applied.rows.length) throw new RouteError('invalid', '没有解析出任何一行带编号的作答')
       const mode = payload && payload.mode === 'replace' ? 'replace' : 'merge'
       const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
@@ -1653,12 +1719,13 @@ export function apply(ctx, config = {}) {
         mode
       })
       await syncScores()
-      const learned = await learnCodes(cfg, def, wave, mapping)
+      const learned = null
       return {
         scale: def.id,
         wave,
         mode,
         imported: applied.rows.length,
+        skipped,
         total: rows.length,
         replaced: mode === 'replace' ? existing.length : Math.max(0, applied.rows.length - existing.length),
         learned,
@@ -1667,11 +1734,9 @@ export function apply(ctx, config = {}) {
       }
     },
 
-    /**
-     * Import one file into every definition its header matches. One QuestionPro
-     * export usually carries several matrices (T0 has four), so this is the
-     * normal path; the per-target import above stays for fixing a single block.
-     */
+    /** 编号列兜底：如果自动识别的列拿不到合格编号，就找一列值符合研究编号规则的重试。 */
+
+    /** Import only the confirmed targets and their positional mappings. */
     async importFile(payload) {
       const current = await model(false)
       const source = await tableFromPayload(payload, cfg)
@@ -1681,15 +1746,29 @@ export function apply(ctx, config = {}) {
       const body = table.slice(1)
       const filename = String((payload && payload.filename) || '')
       const labels = detectLabelRow(table)
-      const targets = scanTargets(current.defs, header, body, labels)
-      if (!targets.length) {
-        throw new RouteError('invalid', `这份文件的列名对不上任何一份量表（前几列：${header.slice(0, 4).join(' / ')}）。可以在预览里手动指定。`)
-      }
+      const selected = payload?.targets
+      if (!Array.isArray(selected) || !selected.length) throw new RouteError('invalid', '请先确认导入目标和列映射')
+      const keys = new Set()
+      const targets = selected.map(target => {
+        const def = findDef(current, String(target.scale || ''))
+        requireWave(def, String(target.wave || ''))
+        const key = JSON.stringify([def.id, target.wave])
+        if (keys.has(key)) throw new RouteError('invalid', '导入目标重复')
+        keys.add(key)
+        if (!target.mapping) throw new RouteError('invalid', '每个目标都需要确认列映射')
+        const mapping = confirmImportMapping(def, header, mapImportColumns(def, target.wave, header, body, labels), target.mapping)
+        const resolved = resolveImport(cfg, def, target.wave, table, mapping)
+        const applied = resolved.applied
+        if (!applied.rows.length) throw new RouteError('invalid', '这份文件没有一行编号符合研究规则（可能都是测试行或未填编号）')
+        return { scale: def.id, wave: target.wave, mapping: resolved.mapping, applied, matched: mapping.matched, total: def.itemCount, skipped: resolved.skipped }
+      })
       const mode = payload && payload.mode === 'replace' ? 'replace' : 'merge'
       const results = []
       for (const target of targets) {
         const def = findDef(current, target.scale)
-        const applied = applyImport(def, target.wave, table, target.mapping)
+        const applied = target.applied
+        const definitionHash = await definitionSnapshot(cfg, JSON.parse(await readFile(def.file, 'utf8')))
+        for (const row of applied.rows) { row.definitionHash = definitionHash; row.submissionId = randomUUID() }
         if (!applied.rows.length) continue
         const file = current.answerFiles.find(item => item.scale === def.id && item.wave === target.wave)
         const rows = mergeAnswerRows(file ? file.rows : [], applied.rows, mode)
@@ -1703,12 +1782,13 @@ export function apply(ctx, config = {}) {
           rows: applied.rows.length,
           mode
         })
-        const learned = await learnCodes(cfg, def, target.wave, target.mapping)
+        const learned = null
         results.push({
           scale: def.id,
           short: def.short,
           wave: target.wave,
           imported: applied.rows.length,
+          skipped: target.skipped || 0,
           total: rows.length,
           matched: target.matched,
           totalItems: target.total,
@@ -1756,6 +1836,155 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /** 可选：把量表提交发布为标准 observation（默认关闭，避免擅自改动既有研究）。 */
+  async function publishObservations(view) {
+    if (!view || !view.instanceId) return { published: 0, reason: '没有绑定实例身份' }
+    const tasks = (cfg.study.tasks || []).filter(task => task && task.source && (task.source.type === 'scale' || task.source.scaleId) && task.source.scaleId && task.source.waveId)
+    if (!tasks.length) return { published: 0, reason: '研究里没有带 scaleId/waveId 的量表任务' }
+    const current = await model(false)
+    const data = openResearchData({ study: cfg.study, instanceId: view.instanceId })
+    const flow = openFlow({ data, study: cfg.study, owner: 'scale-desk' })
+    let published = 0
+    let changed = 0
+    let unregistered = 0
+    let missingDefs = 0
+    for (const task of tasks) {
+      const def = current.defs.find(item => item.id === task.source.scaleId)
+      const wave = String(task.source.waveId)
+      if (!def || !def.waves.includes(wave)) { missingDefs += 1; continue }
+      const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
+      if (!file) continue
+      const visitId = (task.visits && task.visits[0]) || task.visitId || wave
+      for (const row of file.rows || []) {
+        // 未登记编号留在"待关联区"：不静默增加入组人数，也不发布 observation。
+        if (!flow.participants.resolve(row.id)) { unregistered += 1; continue }
+        const result = scoreAnswers(def, row.values)
+        const quality = def.scoring.type === 'none'
+          ? 'unchecked'
+          : result.invalid.length ? 'invalid'
+            : Object.values(result.subs).some(sub => sub.status === 'incomplete' || sub.status === 'empty') ? 'unscorable'
+              : 'valid'
+        const collection = result.answered === def.itemCount ? 'complete' : (result.answered ? 'entered' : 'missing')
+        const sourceRevision = `def:${String(def.definitionHash || '').slice(0, 8)}|sub:${row.submissionId || hash(JSON.stringify(row.values)).slice(0, 12)}`
+        try {
+          flow.observations.publish({
+            participantId: row.id, visitId, taskId: task.id,
+            recordId: `scale_${task.id}_${wave}_${row.id}`,
+            collectionState: collection, qualityState: quality,
+            eventDate: null, datePrecision: 'unknown',
+            sourceType: 'scale', sourceId: `${def.id}@${wave}`, sourceRevision,
+            evidence: { scaleId: def.id, waveId: wave, definitionHash: def.definitionHash || null, submissionId: row.submissionId || null },
+          })
+          published += 1
+        } catch (error) {
+          // 同一条记录已经发布过、但答案版本变了（例如清理重复行后 submissionId 更新）：
+          // 不覆盖旧记录，也不让整次计分失败，计入 changed 由页面提示。
+          if (error && error.code === 'duplicate_record') { changed += 1; continue }
+          throw error
+        }
+      }
+    }
+    return { published, changed, unregistered, missingDefs, tasks: tasks.length }
+  }
+
+  const readActions = new Set(['status','refresh','definition','textsPreview','answer','detail','answers','suspicious','importPreview','validate','studyConfig','studyPreview','capabilities'])
+  const actionNames = new Set([...Object.keys(actions), 'capabilities'])
+
+  /** 读：按调用身份解析研究并切换插件，读期间计数，切换会被拒绝。 */
+  async function runRead(actor, run) {
+    return await binding.read(actor, async () => {
+      activeReads += 1
+      try { return await run() } finally { activeReads -= 1 }
+    })
+  }
+
+  /**
+   * 写：令牌与配置版本已由研究核心核对；这里只保留数据版本比较、事务日志与串行队列。
+   * 保留 pendingWrites 与 writeQueue，避免两次写入交错写同一个作答文件。
+   */
+  async function runWrite(actor, action, payload) {
+    pendingWrites += 1
+    const work = writeQueue.then(async () => {
+      let journal = null
+      const context = cfg
+      try {
+        if (cfg !== context) throw new RouteError('study_mismatch', '研究已切换，请重新提交')
+        invalidate()
+        const marker = path.join(cfg.labDir, '.scale-study.json')
+        const owner = await readJson(marker, null)
+        if (owner && owner.studyId !== cfg.study.id) throw new RouteError('study_mismatch', '该数据目录已属于其他研究')
+        if (!owner) await writeFileAtomic(marker, JSON.stringify({ studyId: cfg.study.id }) + '\n')
+        if (payload?.expectedRevision) {
+          const current = await model(true)
+          if (payload.expectedRevision !== current.revision) throw new RouteError('conflict', '数据已被其他操作更改，请刷新后重试')
+        }
+        const journaled = !['studySave', 'studyConnect', 'reveal', 'recover'].includes(action)
+        const pending = await mutationState(context)
+        if (pending && action !== 'recover') throw new RouteError('recovery_required', '存在未完成写入，请先恢复事务：' + pending.id)
+        if (journaled) journal = await beginMutation(context, action)
+        const result = await actions[action](payload)
+        if (journal) await finishMutation(context)
+        lastWriteError = null
+        return { ...result, revision: (await model(true)).revision }
+      } catch (error) {
+        let recovery = 'no-change'
+        if (journal) {
+          try { await rollbackMutation(context, journal); recovery = 'rolled-back' }
+          catch (rollbackError) { await failMutation(context, journal, rollbackError); recovery = 'recovery-required' }
+        }
+        invalidate(); lastWriteError = { action, message: error.message, recovery, at: new Date().toISOString() }; throw error
+      } finally { pendingWrites -= 1 }
+    })
+    writeQueue = work.catch(() => {})
+    return work
+  }
+
+  async function dispatch(actor, action, payload = {}) {
+    if (!actionNames.has(action)) throw new RouteError('unknown_action', '未知操作：' + action)
+    // 能力查询：先让插件切到该身份的研究，再报告各插件是否一致。
+    if (action === 'capabilities') {
+      await runRead(actor, () => null)
+      return { ...binding.capabilities(actor), study: cfg.study.identity }
+    }
+    // 显式连接研究：写页面/会话绑定并激活，不走写入令牌校验。
+    if (action === 'studyConnect' || action === 'studySave') {
+      if (pendingWrites > 0) throw new RouteError('busy', '正在保存作答，请完成后再切换研究')
+      const result = await actions[action](payload, actor)
+      return result
+    }
+    if (readActions.has(action)) {
+      const { binding: view, data } = await runRead(actor, () => actions[action](payload))
+      return { ...data, binding: view }
+    }
+    const expected = { token: payload.binding || payload.bindingToken, studyId: payload.studyId, studyRevision: payload.studyRevision }
+    const { binding: view, data } = await binding.write(actor, expected, async resolvedView => {
+      const release = config.crossProcessLock === true ? acquireWriteLock(resolvedView) : null
+      try {
+        const value = await runWrite(actor, action, payload)
+        if (config.publishFlow === true && (action === 'score' || action === 'export')) {
+          try { value.publish = await publishObservations(resolvedView) }
+          catch (error) { value.publishError = String(error && error.message ? error.message : error) }
+        }
+        return value
+      } finally { if (release) release() }
+    })
+    return { ...data, binding: view }
+  }
+
+  /**
+   * 可选：写入前取数据核心的跨进程锁（默认关闭）。
+   * 量表自己的 scores.csv / 作答文件不在核心事务里，这个锁补的是"两个宿主进程同时写同一研究"。
+   */
+  function acquireWriteLock(view) {
+    const data = openResearchData({ study: cfg.study, instanceId: view.instanceId })
+    try {
+      const lock = data.lock('scale-desk', { owner: 'scale-desk', timeoutMs: 2000 })
+      return () => { try { lock.release() } catch { /* 已释放 */ } }
+    } catch (error) {
+      throw new RouteError('busy', '另一个进程正在写入这个研究的量表数据，请稍后重试')
+    }
+  }
+
   const handler = async (req, res) => {
     if (!sameOrigin(req) || req.headers[HEADER] !== '1') {
       send(res, 403, { ok: false, error: { code: 'forbidden', message: '拒绝跨站访问量表计分接口' } })
@@ -1763,27 +1992,30 @@ export function apply(ctx, config = {}) {
     }
     try {
       const url = new URL(req.url || ROUTE, 'http://localhost')
+      let action
+      let payload
       if (req.method === 'GET') {
-        const action = url.searchParams.get('action') || 'status'
-        const run = actions[action]
-        if (!run) throw new RouteError('unknown_action', '未知操作：' + action)
-        const data = await run(Object.fromEntries(url.searchParams.entries()))
-        send(res, 200, { ok: true, data })
-        return
-      }
-      if (req.method !== 'POST') throw new RouteError('method', '只接受 GET 与 POST')
-      const body = await readBody(req)
-      const action = String(body.action || url.searchParams.get('action') || '')
-      const run = actions[action]
-      if (!run) throw new RouteError('unknown_action', '未知操作：' + action)
-      const data = await run(body.payload || body || {})
+        action = url.searchParams.get('action') || 'status'
+        if (!actionNames.has(action)) throw new RouteError('unknown_action', '未知操作：' + action)
+        if (!readActions.has(action)) throw new RouteError('method', '写操作必须使用POST')
+        payload = Object.fromEntries(url.searchParams.entries())
+      } else if (req.method === 'POST') {
+        const body = await readBody(req)
+        action = String(body.action || url.searchParams.get('action') || '')
+        if (!actionNames.has(action)) throw new RouteError('unknown_action', '未知操作：' + action)
+        payload = body.payload || body || {}
+      } else throw new RouteError('method', '只接受 GET 与 POST')
+      // 每个标签页一个 pageId（GET 用查询参数、POST 用 body）；pageActor 也会读 x-dsh-page 头。
+      const actor = binding.pageActor({ req, pageId: payload?.pageId })
+      const data = await dispatch(actor, action, payload)
       send(res, 200, { ok: true, data })
     } catch (error) {
-      const status = error instanceof RouteError ? (error.code === 'not_found' ? 404 : 400) : 500
+      const mapped = bindingStatus(error)
+      const status = mapped || (error instanceof RouteError || ['invalid_mapping', 'study_config'].includes(error.code) ? (error.code === 'not_found' ? 404 : 400) : 500)
       if (status >= 500) console.error('[scale-desk]', error)
       send(res, status, {
         ok: false,
-        error: { code: error && error.code ? error.code : 'error', message: String(error && error.message ? error.message : error) }
+        error: { code: error && error.code ? error.code : 'error', message: String(error && error.message ? error.message : error), details: error && error.details }
       })
     }
   }
@@ -1818,20 +2050,24 @@ export function apply(ctx, config = {}) {
         description: '列出量表库：每个量表的题量、计分方式、反向题、波次、已录人数与版本。只读 _lab/scales，返回定义与计数。',
         parameters: { type: 'object', properties: {}, additionalProperties: false },
         output: textOutput,
-        async execute() {
-          const current = await model(false)
-          const lines = [`量表库：${current.defs.length} 个定义（${current.answerFiles.length} 份作答文件）。`]
-          for (const def of current.defs) {
-            const recorded = def.waves.map(wave => {
-              const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
-              return `${wave} ${file ? file.rows.length : 0} 人`
-            }).join('，')
-            const range = def.scoring.subscales && Object.values(def.scoring.subscales).find(sub => sub.range)
-            const subs = Object.values(def.scoring.subscales)
-            lines.push(`- ${def.short}（${def.name}）：${def.itemCount} 题，${def.scoring.type === 'mean' ? '均分' : def.scoring.type === 'none' ? '不计分' : '累加'}${subs.length > 1 ? '，' + subs.map(sub => sub.label).join('/') : ''}${range ? `，范围 ${range.range[0]}–${range.range[1]}` : ''}；反向题 ${def.items.filter(item => item.reverse).map(item => item.no).join('、') || '无'}；${recorded}；版本：${def.version}`)
-          }
-          lines.push(`派生：scores.csv 列 ${current.scores.columns.length}，行 ${current.scores.rows.length}；校验高 ${current.counts.issueBad} 条、中 ${current.counts.issueWarn} 条。`)
-          return { text: lines.join('\n') }
+        async execute(args, exec) {
+          // 会话身份按该会话的研究绑定解析，不读全局"当前研究"。
+          const { data } = await runRead(binding.agentActor(exec), async () => {
+            const current = await model(false)
+            const lines = [`量表库：${current.defs.length} 个定义（${current.answerFiles.length} 份作答文件）。`]
+            for (const def of current.defs) {
+              const recorded = def.waves.map(wave => {
+                const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
+                return `${wave} ${file ? file.rows.length : 0} 人`
+              }).join('，')
+              const range = def.scoring.subscales && Object.values(def.scoring.subscales).find(sub => sub.range)
+              const subs = Object.values(def.scoring.subscales)
+              lines.push(`- ${def.short}（${def.name}）：${def.itemCount} 题，${def.scoring.type === 'mean' ? '均分' : def.scoring.type === 'none' ? '不计分' : '累加'}${subs.length > 1 ? '，' + subs.map(sub => sub.label).join('/') : ''}${range ? `，范围 ${range.range[0]}–${range.range[1]}` : ''}；反向题 ${def.items.filter(item => item.reverse).map(item => item.no).join('、') || '无'}；${recorded}；版本：${def.version}`)
+            }
+            lines.push(`派生：scores.csv 列 ${current.scores.columns.length}，行 ${current.scores.rows.length}；校验高 ${current.counts.issueBad} 条、中 ${current.counts.issueWarn} 条。`)
+            return { text: lines.join('\n') }
+          })
+          return data
         }
       })
 
@@ -1840,25 +2076,28 @@ export function apply(ctx, config = {}) {
         description: '按施测顺序列出实验流程：每个阶段有哪些问卷、量表与任务，量表对应哪个波次、已录几份。数据来自 _lab/scales/flow.json。',
         parameters: { type: 'object', properties: {}, additionalProperties: false },
         output: textOutput,
-        async execute() {
-          const current = await model(false)
-          const flow = current.flow
-          const lines = [`实验流程：${flow.stages.length} 个阶段（${flow.version || '未标版本'}）。`]
-          for (const stage of flow.stages) {
-            lines.push('')
-            lines.push(`${stage.label}${stage.note ? ' — ' + stage.note : ''}`)
-            stage.steps.forEach((step, index) => {
-              if (step.kind === 'scale') {
-                const def = current.defs.find(item => item.id === step.scale)
-                const file = current.answerFiles.find(item => item.scale === step.scale && item.wave === step.wave)
-                lines.push(`  ${index + 1}. [量表] ${def ? def.short : step.scale} ${step.wave}（已录 ${file ? file.rows.length : 0} 份）`)
-              } else {
-                lines.push(`  ${index + 1}. [${KIND_LABEL[step.kind] || step.kind}] ${step.title}${step.note ? '（' + step.note + '）' : ''}`)
-              }
-            })
-          }
-          if (flow.problems.length) lines.push('', `流程问题 ${flow.problems.length} 条：` + flow.problems.map(item => item.text).join('；'))
-          return { text: lines.join('\n') }
+        async execute(args, exec) {
+          const { data } = await runRead(binding.agentActor(exec), async () => {
+            const current = await model(false)
+            const flow = current.flow
+            const lines = [`实验流程：${flow.stages.length} 个阶段（${flow.version || '未标版本'}）。`]
+            for (const stage of flow.stages) {
+              lines.push('')
+              lines.push(`${stage.label}${stage.note ? ' — ' + stage.note : ''}`)
+              stage.steps.forEach((step, index) => {
+                if (step.kind === 'scale') {
+                  const def = current.defs.find(item => item.id === step.scale)
+                  const file = current.answerFiles.find(item => item.scale === step.scale && item.wave === step.wave)
+                  lines.push(`  ${index + 1}. [量表] ${def ? def.short : step.scale} ${step.wave}（已录 ${file ? file.rows.length : 0} 份）`)
+                } else {
+                  lines.push(`  ${index + 1}. [${KIND_LABEL[step.kind] || step.kind}] ${step.title}${step.note ? '（' + step.note + '）' : ''}`)
+                }
+              })
+            }
+            if (flow.problems.length) lines.push('', `流程问题 ${flow.problems.length} 条：` + flow.problems.map(item => item.text).join('；'))
+            return { text: lines.join('\n') }
+          })
+          return data
         }
       })
 
@@ -1868,32 +2107,37 @@ export function apply(ctx, config = {}) {
         parameters: {
           type: 'object',
           properties: {
-            id: { type: 'string', description: '被试编号（5 位数字）；不填则看全表摘要' },
-            scale: { type: 'string', description: '只看某个量表的 id，如 FTPS / STAI_S / DASS_21' }
+            id: { type: 'string', description: '被试编号（非空字符串）；不填则看全表摘要' },
+            scale: { type: 'string', description: '只看某个量表的 id，如 GARDEN' }
           },
           additionalProperties: false
         },
         output: textOutput,
-        async execute(args) {
-          const current = await model(false)
-          const id = String((args && args.id) || '').trim()
-          const only = String((args && args.scale) || '').trim()
-          if (!id) return { text: scoresSummaryText(current.defs, current.scores, current.issues) }
-          const subject = current.scores.rows.find(row => row.id === id)
-          if (!subject) throw new Error(`没有 ${id} 的作答；先在「量表计分 → 录入」里录入，或导入问卷平台导出。`)
-          const lines = [`被试 ${id} 的量表分数：`]
-          for (const def of current.defs) {
-            if (only && def.id !== only) continue
-            for (const wave of def.waves) {
-              const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
-              const row = file ? file.rows.find(item => item.id === id) : undefined
-              if (!row) continue
-              const result = scoreAnswers(def, row.values)
-              lines.push(subjectScoreText(def, wave, row, result))
+        async execute(args, exec) {
+          const { data } = await runRead(binding.agentActor(exec), async () => {
+            const current = await model(false)
+            const id = normalizeId(args && args.id)
+            const only = String((args && args.scale) || '').trim()
+            if (!id) return { text: scoresSummaryText(current.defs, current.scores, current.issues) }
+            const subject = current.scores.rows.find(row => row.id === id)
+            if (!subject) throw new Error(`没有 ${id} 的作答；先在「量表计分 → 录入」里录入，或导入问卷平台导出。`)
+            const lines = [`被试 ${id} 的量表分数：`]
+            for (const def of current.defs) {
+              if (only && def.id !== only) continue
+              for (const wave of def.waves) {
+                const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
+                const entries = file ? file.rows.filter(item => item.id === id) : []
+                if (entries.length > 1) { lines.push(`${def.short}（${def.name}）${wave}：duplicate，重复作答 ${entries.length} 份，未计分；请先在核对里保留一份`); continue }
+                const row = entries[0]
+                if (!row) continue
+                const result = scoreAnswers(def, row.values)
+                lines.push(subjectScoreText(def, wave, row, result))
+              }
             }
-          }
-          if (lines.length === 1) lines.push('（该编号还没有任何作答记录）')
-          return { text: lines.join('\n') }
+            if (lines.length === 1) lines.push('（该编号还没有任何作答记录）')
+            return { text: lines.join('\n') }
+          })
+          return data
         }
       })
 
@@ -1909,23 +2153,26 @@ export function apply(ctx, config = {}) {
           additionalProperties: false
         },
         output: textOutput,
-        async execute(args) {
-          const current = await model(true)
-          const id = String((args && args.id) || '').trim()
-          const level = String((args && args.level) || 'all')
-          const issues = current.issues.filter(item => {
-            if (id && item.id && item.id !== id) return false
-            if (level === 'bad') return item.level === 'bad'
-            if (level === 'warn') return item.level !== 'info'
-            return true
+        async execute(args, exec) {
+          const { data } = await runRead(binding.agentActor(exec), async () => {
+            const current = await model(true)
+            const id = String((args && args.id) || '').trim()
+            const level = String((args && args.level) || 'all')
+            const issues = current.issues.filter(item => {
+              if (id && item.id && item.id !== id) return false
+              if (level === 'bad') return item.level === 'bad'
+              if (level === 'warn') return item.level !== 'info'
+              return true
+            })
+            const lines = [`校验：共 ${issues.length} 条（高 ${issues.filter(item => item.level === 'bad').length}，中 ${issues.filter(item => item.level === 'warn').length}，提示 ${issues.filter(item => item.level === 'info').length}）。`]
+            for (const item of issues.slice(0, 40)) {
+              lines.push(`- [${item.level === 'bad' ? '高' : item.level === 'warn' ? '中' : '提示'}] ${item.text}`)
+              if (item.hint) lines.push(`  ${item.hint}`)
+            }
+            if (issues.length > 40) lines.push(`（还有 ${issues.length - 40} 条，见面板「校验」）`)
+            return { text: lines.join('\n') }
           })
-          const lines = [`校验：共 ${issues.length} 条（高 ${issues.filter(item => item.level === 'bad').length}，中 ${issues.filter(item => item.level === 'warn').length}，提示 ${issues.filter(item => item.level === 'info').length}）。`]
-          for (const item of issues.slice(0, 40)) {
-            lines.push(`- [${item.level === 'bad' ? '高' : item.level === 'warn' ? '中' : '提示'}] ${item.text}`)
-            if (item.hint) lines.push(`  ${item.hint}`)
-          }
-          if (issues.length > 40) lines.push(`（还有 ${issues.length - 40} 条，见面板「校验」）`)
-          return { text: lines.join('\n') }
+          return data
         }
       })
     } catch (error) {

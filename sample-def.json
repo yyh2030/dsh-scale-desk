@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "GARDEN",
+  "name": "虚构花园体验问卷",
+  "short": "花园示例",
+  "version": "fictional-1",
+  "source": "软件演示用虚构材料，无研究或临床效度",
+  "license": "本示例可自由修改",
+  "itemCount": 4,
+  "items": [
+    { "no": 1, "text": "这座虚构花园的步道容易辨认。", "kind": "likert", "reverse": false },
+    { "no": 2, "text": "这座虚构花园的标牌让我困惑。", "kind": "likert", "reverse": true },
+    { "no": 3, "text": "这座虚构花园有足够的休息空间。", "kind": "likert", "reverse": false },
+    { "no": 4, "text": "我愿意再次参观这座虚构花园。", "kind": "likert", "reverse": false }
+  ],
+  "response": { "min": 1, "max": 5, "labels": { "1": "不同意", "2": "较不同意", "3": "中间", "4": "较同意", "5": "同意" } },
+  "waves": ["baseline", "followup"],
+  "codes": { "baseline": ["garden_b_1", "garden_b_2", "garden_b_3", "garden_b_4"], "followup": ["garden_f_1", "garden_f_2", "garden_f_3", "garden_f_4"] },
+  "missing": { "rule": "prorate", "minProportion": 0.75 },
+  "scoring": { "type": "mean", "subscales": { "experience": { "label": "虚构体验", "items": [1, 2, 3, 4], "multiplier": 1, "range": [1, 5] } } }
+}

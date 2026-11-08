@@ -1,6 +1,4 @@
 - insert:
     - id: scale-desk
       name: '@local/scale-desk'
-      config:
-        projectRoot: 'C:/Users/16787/OneDrive/Desktop/yyh硕士论文'
-        labDir: 'D:/yyh-lab'
+      config: {}

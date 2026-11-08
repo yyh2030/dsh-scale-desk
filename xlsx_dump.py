@@ -28,6 +28,17 @@ def pick_sheet(workbook):
     return max(candidates, key=lambda sheet: sheet.max_row or 0)
 
 
+def cell(value):
+    """Excel 把编号存成数字时 openpyxl 读出来是 float（11002.0），导出成文本要还原成 11002。"""
+    if value is None:
+        return ''
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value if isinstance(value, str) else str(value)
+
+
 def main(path):
     # Normal mode: QuestionPro's workbook metadata makes read_only report a
     # one-row sheet, which would silently drop every response.
@@ -42,7 +53,7 @@ def main(path):
             values = ['' if value is None else value for value in row]
             if all(str(value).strip() == '' for value in values):
                 continue
-            writer.writerow([str(value) if not isinstance(value, str) else value for value in values])
+            writer.writerow([cell(value) for value in values])
         payload = {'sheet': sheet.title, 'csv': buffer.getvalue(), 'rows': sheet.max_row}
     finally:
         workbook.close()
