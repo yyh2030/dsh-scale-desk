@@ -1,44 +1,116 @@
-# 量表计分
+# @local/scale-desk
 
-定义驱动的量表库、问卷录入、列映射导入、计分与质控。默认是内存中的空研究；状态、校验与工具查询不创建目录、不播种定义、不写分数。研究材料和作答均由使用者显式配置。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)(`dsh`)写的研究插件:量表计分台。量表定义、作答录入、列映射导入、一键计分与质控校验放在同一个面板里,分数从哪一版定义、哪一版作答算出来是可追溯的。
 
-## 研究连接
+版本 0.2.0 · 需要 DSH ≥ 0.2.2-rc.1 · MIT 许可 · 依赖 [`@local/research-core`](https://github.com/yyh33028-netizen/dsh-research-core)
 
-插件配置可给 `studyPath` 指向本机研究JSON。研究的 `schemaVersion` 为1，包含 `studyId`、`name`、`dataRoot`、`participantId`、`participants`、`visits`、`tasks`、`followups` 和 `plugins.scales`。相对路径以研究文件所在目录解析。未给研究文件时使用工作目录下 `_lab` 作为默认数据目录；`projectRoot`、`labDir`、`scalesDir`、`subjectsPath` 显式配置仍可使用。
+## 为什么需要它
 
-「研究」页支持连接已有路径、编辑JSON、验证预览及保存。连接使用同Host内共享的prepare/commit/rollback协调器切换已注册研究插件；状态列出参与切换的插件与一致性。未注册插件仍需单独配置。已有文件保存需要版本一致。不同研究ID不能写入同一个已认领的数据目录。
+量表数据出错的典型方式不是算错,而是算得对但说不清:反向题漏翻了一题、缺失规则换了、题号在两次导入之间挪了位、某个人做了两遍问卷而两份都被算进了分数。这些问题的共同点是事后无法回答"这个分数是怎么来的"。
 
-`sample-study.json` 与 `sample-def.json` 是完全虚构的花园体验演示，不具有研究或临床效度。「初始化空目录」或「加入虚构花园示例」才会写入目录。定义全部删除后保持空白。
+计分台的做法是把定义、作答和分数拆成三层,每层都留 hash:定义改动会产生新的定义快照,作答按提交批次保存,重算产出新的代次并记录输入的作答集合、编号集合、定义与计分代码。既往代次不会被覆盖,所以旧分数一直可以解释。
 
-## 数据与编号
+## 能做什么
 
-参与者编号按字符串处理，保留前导零、字母及Unicode。默认需非空且不含控制字符；研究可设置 `participantId.pattern`，所有录入、导入和改号使用同一规则。组别独立保存在参与者表。数值型Excel已经丢失的显示格式无法自动恢复。
+- **量表库**:每个量表声明题量、作答范围、波次、导出码、缺失规则与计分方式(总量表与分量表、乘数、反向题)。定义先校验原始 schema、题号与反向冲突,再归一化。
+- **流程视图**:按波次列出每个量表已录几份、还缺哪些人,一眼看出数据收集的进站在哪。
+- **手填录入**:按题目逐项填写,支持数值题小数;缺失码与合法选项分开识别,填错时提示而不是静默记成缺失。
+- **问卷平台导入**:按位置映射列(`idIndex`、`items[].index` 从 0 开始,缺失列为 -1),预览可改列与重算;通用题号与题面只产生候选,需要你明确指定量表与波次才会写入。
+- **重复作答处理**:同一人多份作答保留全部原值,在宽表、明细、工具与导出里一致标为 duplicate 且不出正式分;在核对页选定一份后才有正式分。
+- **计分与派生**:一次重算同时产出量表分数、题目明细与宽表。分量表可指定 `minAnswered`,未指定时按声明的 `minProportion` 或整表门槛比例计算;`strict` 规则缺一题不计分。
+- **质控校验**:题量、反向题、取值范围、缺失比例、导出码、定义版本漂移逐项检查,返回问题清单并区分高优先与提示,不改数据。
+- **版本追溯**:每题作答带 `definitionHash` 与 `submissionId`;定义快照保存在 `definition-history`,旧 CSV 可读但标记为未知定义版本,查询不回写旧作答。
+- **发布到核心**:`publishFlow` 打开后,计分与导出会把结果按 observation 发布到共享核心的数据集,供运行台与分析使用;默认关闭,避免在未授权时给既有研究新增目录结构。
 
-量表定义在 `scales/defs`，作答在 `scales/answers`。新作答CSV包含 `definitionHash`、`submissionId` 与题目原值；不可变定义快照在 `definition-history`。旧CSV可读取并标记未知定义版本，查询不回写旧作答。版本漂移按每行hash检查。
+### Agent 工具
 
-定义先验证原始schema、题号和反向冲突再归一化；错误定义不会产生正式分数。Likert按整数档位，数值题允许小数并按逐题范围反向。合法选项与文本先于缺失码识别。分量表可指定 `minAnswered`；未指定时按声明的 `minProportion` 或整表门槛比例计算。strict规则缺一题不计分。
+| 工具 | 用途 |
+|---|---|
+| `scale_list` | 量表库清单:题量、计分方式、反向题、波次、已录人数与版本 |
+| `scale_flow` | 按施测顺序列出流程:每个阶段的问卷、量表与任务,以及各波次已录份数 |
+| `scale_score` | 给编号看该被试各量表各波次分数、缺失题数与未计分原因;不给编号看全表摘要 |
+| `scale_validate` | 检查定义与作答数据,返回问题清单(高/中/提示) |
 
-## 导入与编辑
+工具查询默认只给编号与计数,不含姓名。
 
-导入预览接受位置映射；`idIndex`、`items[].index` 从0开始，题目缺失列为-1，名称仅显示。改列与编号列重新计算预览；重复同名列按位置区分。通用Q题号、题面及顺序只产生候选，需明确量表与波次。专用码的多个目标只有列集合不重叠时才可批量确认。`importFile` 必须传 `targets: [{ scale, wave, mapping }]`。
+## 安装
 
-元信息编辑只提交变化的计分字段；单纯更名、说明或指导语不会重建原计分对象、子集、乘数和输出键。添加波次不改旧导出码。导入不自动学习或覆盖定义映射。
+```powershell
+git clone https://github.com/yyh33028-netizen/dsh-research-core.git
+git clone https://github.com/yyh33028-netizen/dsh-scale-desk.git
+dsh plugin --profile <profile> add link:<父目录>\dsh-scale-desk
+```
 
-重复作答保留原值，宽表、明细接口、工具和导出一致标为duplicate并不出正式分。先在核对页选择一份。各写操作在插件实例内排队。所有写请求必须带当前 `studyId`、`contextRevision` 和 `selectionRevision`，防止旧连接在A→B→A后写入；带 `expectedRevision` 可拒绝旧数据覆盖。浏览器自动附带这些字段，成功响应返回最新revision。
+或者用 git 形式:
 
-## 派生与错误
+```powershell
+dsh plugin --profile <profile> add git+https://github.com/yyh33028-netizen/dsh-scale-desk.git
+```
 
-重算生成分数、题目明细与宽表。每代输出在 `score-generations`，并保存输入作答、编号集合、定义和计分代码快照。`scores-manifest.json` 是同代文件与输入/定义hash的权威清单，读取者应优先使用其不可变代路径。平面CSV仅为兼容镜像，进程被终止时不能保证镜像永远同代。
+两种方式都要求 `research-core` 与本插件同级,插件用相对路径 `../research-core/host.mjs` 引用共享核心。仓库是私有的,安装前需要有访问权限。装完重启承载 `dsh web` 的进程,面板改动需要刷新页面。
 
-每次数据写入先保存持久事务快照，普通异常回滚原始作答、日志和兼容派生。若进程中断或回滚失败，状态的 `transaction` 显示待恢复状态，并阻止继续写入；界面「恢复未完成事务」调用 `recover` 回到写入前快照。definition-history已有内容须hash一致，不覆盖损坏快照。实例内队列不构成多个Host进程间的锁。
+## 配置
 
-`.xlsx`通过Python/openpyxl读取。可显式配置 `pythonPath`，否则使用环境 `DSH_PYTHON_PATH` 或PATH中的 `python`。纯CSV/TSV导入无需Python。
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `studyPath` | 空 | 研究定义 JSON;为空时用工作目录下的 `_lab` 作为数据目录 |
+| `projectRoot` | 会话工作目录 | 相对路径基准,也是未配置研究时的默认根 |
+| `labDir` | 研究的 `dataRoot` | 数据目录 |
+| `scalesDir` | `<labDir>/scales` | 量表定义(`defs/`)、作答(`answers/`)、`imports.json`、`flow.json` |
+| `subjectsPath` | 研究的 `participants.path`,否则 `<labDir>/subjects.csv` | 参与者表 |
+| `pythonPath` | `DSH_PYTHON_PATH`,否则 PATH 中的 `python` | 只在读 `.xlsx` 时需要;纯 CSV/TSV 不需要 Python |
+| `crossProcessLock` | `false` | 打开后写操作额外取跨进程锁 |
+| `publishFlow` | `false` | 打开后计分与导出发布 observation 到共享核心 |
 
-## 验证
+输出位置:`<labDir>/scores.csv`、`scores_detail.csv`、`data_wide.csv`、`export/`、`scores-manifest.json`,以及 `score-generations/` 下的代次目录。平面 CSV 只是兼容镜像,读取者应优先使用 manifest 里的不可变代路径 —— 进程被终止时不保证镜像与代次同代。
+
+研究定义里与本插件相关的是 `visits`、`tasks` 与参与者表;量表定义单独放在 `scalesDir/defs`:
+
+```json
+{
+  "schema": 1,
+  "id": "GARDEN",
+  "name": "示例问卷",
+  "version": "fictional-1",
+  "items": [
+    { "no": 1, "text": "题面一", "kind": "likert", "reverse": false },
+    { "no": 2, "text": "题面二", "kind": "likert", "reverse": true }
+  ],
+  "response": { "min": 1, "max": 5 },
+  "waves": ["baseline", "followup"],
+  "codes": { "baseline": ["sample_b_1", "sample_b_2"] },
+  "missing": { "rule": "prorate", "minProportion": 0.75 },
+  "scoring": { "type": "mean", "subscales": { "total": { "label": "总分", "items": [1, 2], "multiplier": 1, "range": [1, 5] } } }
+}
+```
+
+仓库里的 `sample-def.json` 与 `sample-study.json` 是完全虚构的演示材料,没有研究或临床效度;只有点击「初始化空目录」或「加入虚构示例」才会写盘,定义全部删除后保持空白。
+
+## 数据与隐私
+
+- 不联网。列映射与计分全在本机完成,`.xlsx` 用本机 Python/openpyxl 读取。
+- 不存姓名与联系方式:编号按字符串处理,保留前导零、字母与 Unicode;组别单独保存在参与者表。
+- 工具与导出默认只含编号,不含姓名。
+- 每次数据写入先存事务快照,普通异常回滚原始作答、日志与兼容派生;进程中断留下待恢复状态时会阻止继续写入,界面提供「恢复未完成事务」。
+
+## 已知限制
+
+- Excel 已经丢失的显示格式无法自动恢复;数值日期等复杂 Office 显示格式需要核对预览。
+- 定义版本只能按 hash 识别:旧作答缺少 `definitionHash` 时标为未知定义版本,不会推测它对应哪一版。
+- 导入不会自动学习或覆盖定义映射;模糊题面只给候选,不自动确认。
+- 实例内写队列不构成多个 Host 进程之间的锁;需要跨进程保护时要显式打开 `crossProcessLock`。
+- 多分量表的计分键需要在定义 JSON 里改,界面只做单分量表的快捷调整。
+- 平面 CSV 镜像在进程被强制终止时可能滞后于代次;权威读取路径是 `scores-manifest.json`。
+
+## 自测
 
 ```powershell
 npm test
 npm run test:host
 ```
 
-全部测试仅使用临时虚构研究。测试真实客户端事件构造、Host路由、研究切换、纯查询不写盘、映射、编号、定义追溯、派生manifest和并发冲突。
+测试只使用临时虚构研究,覆盖映射、编号、定义追溯、派生 manifest 与并发冲突。
+
+## 许可
+
+MIT。仓库里还没有放 `LICENSE` 文件,公开发布前需要补上。
