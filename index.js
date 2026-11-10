@@ -2107,7 +2107,7 @@ export function apply(ctx, config = {}) {
         payload = body.payload || body || {}
       } else throw new RouteError('method', '只接受 GET 与 POST')
       // 每个标签页一个 pageId（GET 用查询参数、POST 用 body）；pageActor 也会读 x-dsh-page 头。
-      const actor = binding.pageActor({ req, pageId: payload?.pageId })
+      const actor = binding.pageActor({ req, pageId: payload?.pageId, workspaceId: payload?.workspaceId, sessionId: payload?.sessionId })
       const data = await dispatch(actor, action, payload)
       send(res, 200, { ok: true, data })
     } catch (error) {
