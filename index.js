@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { loadStudyContext, validateStudyDefinition } from './study-context.mjs'
 import { atomic, hash, definitionSnapshot, publishGeneration } from './persistence.mjs'
 import { hostBinding, bindingStatus, BindingError } from '../research-core/host.mjs'
+import { agentProjection, resolvePrivacyPolicy, sanitizeError } from '../research-core/privacy-projection.mjs'
 import { openResearchData } from '../research-core/data.mjs'
 import { openFlow } from '../research-core/flow.mjs'
 import { readFileSync } from 'node:fs'
@@ -728,6 +729,98 @@ async function exportReport(model, cfg) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 07：量表分数的 Agent 投影
+ *
+ * 逐人分数只在本地模型里计算；工具只把计数/汇总交给 agentProjection。
+ * 这样即使配置被误改，返回里也不会出现编号、分数、路径。
+ * ------------------------------------------------------------------ */
+
+function recordedForWave(model, def, wave) {
+  const missingCol = scoreColumns(def).find(column => column.kind === 'missing' && column.wave === wave)
+  if (!missingCol) return 0
+  return model.scores.rows.filter(row => {
+    const cell = row.cells && row.cells[missingCol.key]
+    return cell && cell.status && cell.status !== 'absent'
+  }).length
+}
+
+function buildScaleScoreSummary(model, args = {}) {
+  const id = normalizeId(args && args.id)
+  const only = String((args && args.scale) || '').trim()
+  const defs = (model.defs || []).filter(def => !only || def.id === only)
+  const counts = {
+    scales: defs.length,
+    subjects: Number(model.scores?.counts?.subjects || 0),
+    filled: Number(model.scores?.counts?.filled || 0),
+    complete: Number(model.scores?.counts?.complete || 0),
+    answers: Number(model.counts?.answers || 0),
+    bad: Number(model.counts?.issueBad || 0),
+    warn: Number(model.counts?.issueWarn || 0),
+  }
+  if (!id) {
+    return {
+      scope: 'summary',
+      status: model.stale ? 'stale' : 'ok',
+      counts,
+      scales: defs.map(def => ({
+        id: def.id,
+        short: def.short,
+        name: def.name,
+        itemCount: def.itemCount,
+        waves: def.waves.map(wave => ({ wave, recorded: recordedForWave(model, def, wave) })),
+      })),
+    }
+  }
+  const subject = (model.scores?.rows || []).find(row => row.id === id)
+  if (!subject) throw Object.assign(new Error('没有该编号的作答；先在「量表计分 → 录入」里录入，或导入问卷平台导出。'), { code: 'not_found' })
+  // 只在内存里汇总作答计数；分数值与题目原始值不进入返回。
+  let answered = 0
+  let missing = 0
+  let records = 0
+  for (const def of defs) {
+    for (const wave of def.waves) {
+      const file = (model.answerFiles || []).find(item => item.scale === def.id && item.wave === wave)
+      const entries = file ? file.rows.filter(item => item.id === id) : []
+      if (entries.length !== 1) continue
+      const result = scoreAnswers(def, entries[0].values)
+      answered += result.answered
+      missing += result.missing
+      records += 1
+    }
+  }
+  return { scope: 'subject', status: records ? 'ok' : 'missing', counts: { ...counts, matched: 1, records, answered, missing } }
+}
+
+function renderScaleScoreProjection(projection) {
+  if (!projection || typeof projection !== 'object') return '量表分数：暂无可返回内容。'
+  if (projection.status === 'error') {
+    return [`量表分数：读取失败（${projection.code || 'error'}）。`, projection.message || '', projection.note || ''].filter(Boolean).join('\n')
+  }
+  const lines = []
+  if (projection.code === 'policy_blocked') {
+    lines.push(`量表分数：请求被隐私策略拒绝（${projection.code}）。`)
+    for (const item of projection.blocked || []) lines.push(`- ${item.field}：${item.reason}`)
+    lines.push(projection.note || '')
+    return lines.filter(Boolean).join('\n')
+  }
+  const label = projection.projection === 'summary-cloud' ? '汇总视图' : (projection.projection === 'strict-local' ? '严格本地（只给状态与计数）' : String(projection.projection || '摘要'))
+  lines.push(`量表分数：${label}；状态 ${projection.status || 'unknown'}。`)
+  if (projection.counts && Object.keys(projection.counts).length) {
+    lines.push('计数：' + Object.entries(projection.counts).map(([key, value]) => `${key} ${value}`).join('，') + '。')
+  }
+  if (projection.scope === 'subject') lines.push('逐人分数与题目原始值不进入 Agent 返回；需要核对请在本地页面查看。')
+  for (const scale of projection.scales || []) {
+    const itemCount = Number.isFinite(Number(scale.itemCount)) ? `${scale.itemCount} 题` : ''
+    const waves = (scale.waves || []).map(wave => `${wave.wave} ${wave.recorded} 人`).join('，')
+    lines.push(`- ${scale.short || scale.id}（${scale.name || ''}${itemCount ? '，' + itemCount : ''}）：${waves || '尚无可统计波次'}`)
+  }
+  for (const item of projection.blocked || []) lines.push(`已阻断：${item.field}（${item.reason}）`)
+  if (projection.enforceability && projection.enforceability.unenforceable) lines.push(`边界：${projection.enforceability.reason}`)
+  if (projection.note) lines.push(projection.note)
+  return lines.join('\n')
+}
+
+/* ------------------------------------------------------------------ *
  * plugin
  * ------------------------------------------------------------------ */
 
@@ -743,6 +836,17 @@ export function apply(ctx, config = {}) {
   let modelAt = 0
   let building = null
   const CACHE_TTL_MS = 5000
+
+  /** 07：隐私模式只读 privacy 服务/研究配置/插件配置；工具参数不能放宽。 */
+  function privacyPolicy() {
+    return resolvePrivacyPolicy({ ctx, config, study: cfg.study, pluginKey: 'scales' })
+  }
+  function currentPrivacyMode() {
+    try { return privacyPolicy().mode } catch { return 'strict-local' }
+  }
+  function privacyOptions(policy) {
+    return { sessionTools: policy.sessionTools, allowedColumns: policy.allowedColumns, maxBytes: policy.maxBytes, attachments: policy.attachments }
+  }
 
   async function model(force = false) {
     if (!force && modelCache && Date.now() - modelAt < CACHE_TTL_MS) return modelCache
@@ -2116,7 +2220,8 @@ export function apply(ctx, config = {}) {
       if (status >= 500) console.error('[scale-desk]', error)
       send(res, status, {
         ok: false,
-        error: { code: error && error.code ? error.code : 'error', message: String(error && error.message ? error.message : error), details: error && error.details }
+        // 07：错误信息去路径/编号；details 与异常栈不返回。
+        error: sanitizeError(error, { mode: currentPrivacyMode() })
       })
     }
   }
@@ -2215,30 +2320,17 @@ export function apply(ctx, config = {}) {
         },
         output: textOutput,
         async execute(args, exec) {
-          const { data } = await runRead(binding.agentActor(exec), async () => {
-            const current = await model(false)
-            const id = normalizeId(args && args.id)
-            const only = String((args && args.scale) || '').trim()
-            if (!id) return { text: scoresSummaryText(current.defs, current.scores, current.issues) }
-            const subject = current.scores.rows.find(row => row.id === id)
-            if (!subject) throw new Error(`没有 ${id} 的作答；先在「量表计分 → 录入」里录入，或导入问卷平台导出。`)
-            const lines = [`被试 ${id} 的量表分数：`]
-            for (const def of current.defs) {
-              if (only && def.id !== only) continue
-              for (const wave of def.waves) {
-                const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
-                const entries = file ? file.rows.filter(item => item.id === id) : []
-                if (entries.length > 1) { lines.push(`${def.short}（${def.name}）${wave}：duplicate，重复作答 ${entries.length} 份，未计分；请先在核对里保留一份`); continue }
-                const row = entries[0]
-                if (!row) continue
-                const result = scoreAnswers(def, row.values)
-                lines.push(subjectScoreText(def, wave, row, result))
-              }
-            }
-            if (lines.length === 1) lines.push('（该编号还没有任何作答记录）')
-            return { text: lines.join('\n') }
-          })
-          return data
+          try {
+            const { data } = await runRead(binding.agentActor(exec), async () => {
+              const current = await model(false)
+              // 07：逐人分数只在内存里汇总，返回内容必须经过 agentProjection。
+              return { summary: buildScaleScoreSummary(current, args || {}), policy: privacyPolicy() }
+            })
+            const projection = agentProjection('scale_score', data.summary, data.policy.mode, privacyOptions(data.policy))
+            return { text: renderScaleScoreProjection(projection) }
+          } catch (error) {
+            return { text: renderScaleScoreProjection(sanitizeError(error, { mode: currentPrivacyMode() })) }
+          }
         }
       })
 
