@@ -894,7 +894,7 @@ export function apply(ctx, config = {}) {
     },
     async status() {
       const current = await model(false)
-      return { ...statusPayload(current, cfg), transaction: await mutationState(cfg), lastWriteError }
+      return { ...statusPayload(current, cfg), transaction: await mutationState(cfg), lastWriteError, publishOutbox: await readOutbox() }
     },
 
     async refresh() {
@@ -1869,7 +1869,7 @@ export function apply(ctx, config = {}) {
         try {
           flow.observations.publish({
             participantId: row.id, visitId, taskId: task.id,
-            recordId: `scale_${task.id}_${wave}_${row.id}`,
+            recordId: `scale_${task.id}_${wave}_${row.id}_${String(row.submissionId || hash(JSON.stringify(row.values)).slice(0, 8))}`,
             collectionState: collection, qualityState: quality,
             eventDate: null, datePrecision: 'unknown',
             sourceType: 'scale', sourceId: `${def.id}@${wave}`, sourceRevision,
@@ -1887,8 +1887,109 @@ export function apply(ctx, config = {}) {
     return { published, changed, unregistered, missingDefs, tasks: tasks.length }
   }
 
+  /* ---------- 数值分数发布（F01）与待发布 outbox（F03） ---------- */
+
+  function outboxPath() { return path.join(cfg.labDir, 'scale-publish-outbox.json') }
+
+  async function readOutbox() {
+    try {
+      const doc = JSON.parse(await readFile(outboxPath(), 'utf8'))
+      if (!doc || !Array.isArray(doc.pending)) return { schemaVersion: 1, pending: [], lastError: null }
+      return doc
+    } catch {
+      return { schemaVersion: 1, pending: [], lastError: null }
+    }
+  }
+
+  async function writeOutbox(doc) {
+    await writeFileAtomic(outboxPath(), JSON.stringify({ ...doc, updatedAt: new Date().toISOString() }, null, 2))
+  }
+
+  /**
+   * 把量表数值分数作为核心独立数据集提交：每个 (参与者, 量表, 波次, 分量表) 一行。
+   * 多份提交保留全部原值；只有被核心裁决选中的 submission 才出数值，其余标 duplicate。
+   */
+  async function publishScores(view) {
+    if (!view || !view.instanceId) return { published: 0, reason: '没有绑定实例身份' }
+    const current = await model(false)
+    const data = openResearchData({ study: cfg.study, instanceId: view.instanceId })
+    const flow = openFlow({ data, study: cfg.study, owner: 'scale-desk' })
+    const tasks = (cfg.study.tasks || []).filter(task => task && task.source && task.source.scaleId && task.source.waveId)
+    const rows = []
+    let unscorable = 0
+    for (const task of tasks) {
+      const def = current.defs.find(item => item.id === task.source.scaleId)
+      const wave = String(task.source.waveId)
+      if (!def || !def.waves.includes(wave)) continue
+      const file = current.answerFiles.find(item => item.scale === def.id && item.wave === wave)
+      if (!file) continue
+      const visitId = (task.visits && task.visits[0]) || task.visitId || wave
+      const groups = new Map()
+      for (const row of file.rows || []) {
+        const participant = flow.participants.resolve(row.id)
+        if (!participant) continue
+        const key = `${participant.participantKey}|${wave}`
+        if (!groups.has(key)) groups.set(key, { participant, submissions: [] })
+        groups.get(key).submissions.push(row)
+      }
+      for (const group of groups.values()) {
+        const slot = flow.observations.effective({ participantKey: group.participant.participantKey, visitId, taskId: task.id })
+        let selected = slot && slot.state === 'complete' && slot.effective && slot.effective.evidence ? (slot.effective.evidence.submissionId || null) : null
+        if (!selected && group.submissions.length === 1) selected = group.submissions[0].submissionId || null
+        for (const row of group.submissions) {
+          const result = scoreAnswers(def, row.values)
+          const chosen = Boolean(selected) && row.submissionId === selected
+          for (const [subKey, sub] of Object.entries(result.subs)) {
+            const scorable = ['ok', 'prorated'].includes(sub.status)
+            const value = chosen && scorable ? sub.score : null
+            if (value === null) unscorable += 1
+            rows.push({
+              participantId: row.id, participantKey: group.participant.participantKey,
+              scaleId: def.id, waveId: wave, subscaleKey: subKey || 'total',
+              numericValue: value,
+              status: chosen ? sub.status : (group.submissions.length > 1 ? 'duplicate' : sub.status),
+              reason: value === null
+                ? (group.submissions.length > 1 ? '多份提交未裁决或未被选中' : (sub.status === 'incomplete' ? '未答完' : '不可计分'))
+                : null,
+              definitionHash: def.definitionHash || null, definitionVersion: def.version || null,
+              selectedSubmissionId: selected, submissionId: row.submissionId || null,
+              answered: sub.answered, missing: sub.missing, itemCount: def.itemCount,
+              sourceRevision: `def:${String(def.definitionHash || '').slice(0, 8)}|sub:${row.submissionId || ''}`,
+              recordedAt: new Date().toISOString(),
+            })
+          }
+        }
+      }
+    }
+    const result = data.commit('scores', { schemaVersion: 1, plugin: 'scale-desk', studyId: cfg.study.id, rows }, { owner: 'scale-desk', note: '量表数值分数' })
+    return { published: rows.length, unscorable, revision: result.revision, contentHash: result.contentHash, unchanged: Boolean(result.unchanged) }
+  }
+
+  async function publishAll(view) {
+    const observations = await publishObservations(view)
+    let scores = null
+    try { scores = await publishScores(view) } catch (error) { scores = { error: String(error && error.message ? error.message : error) } }
+    return { observations, scores }
+  }
+
+  /** 发布失败写入 outbox；下一次成功发布时清空。补发不依赖用户记得点计分。 */
+  async function attemptPublish(view, action) {
+    try {
+      const result = await publishAll(view)
+      const outbox = await readOutbox()
+      await writeOutbox({ ...outbox, pending: [], lastError: null, lastSuccessAt: new Date().toISOString(), lastAction: action })
+      return { ok: true, ...result }
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error)
+      const outbox = await readOutbox()
+      outbox.pending.push({ at: new Date().toISOString(), action, error: message })
+      await writeOutbox({ ...outbox, lastError: message, lastAction: action })
+      return { ok: false, error: message }
+    }
+  }
+
   const readActions = new Set(['status','refresh','definition','textsPreview','answer','detail','answers','suspicious','importPreview','validate','studyConfig','studyPreview','capabilities'])
-  const actionNames = new Set([...Object.keys(actions), 'capabilities'])
+  const actionNames = new Set([...Object.keys(actions), 'capabilities', 'publishRetry'])
 
   /** 读：按调用身份解析研究并切换插件，读期间计数，切换会被拒绝。 */
   async function runRead(actor, run) {
@@ -1960,10 +2061,10 @@ export function apply(ctx, config = {}) {
     const { binding: view, data } = await binding.write(actor, expected, async resolvedView => {
       const release = config.crossProcessLock === true ? acquireWriteLock(resolvedView) : null
       try {
+        if (action === 'publishRetry') return await attemptPublish(resolvedView, 'retry')
         const value = await runWrite(actor, action, payload)
-        if (config.publishFlow === true && (action === 'score' || action === 'export')) {
-          try { value.publish = await publishObservations(resolvedView) }
-          catch (error) { value.publishError = String(error && error.message ? error.message : error) }
+        if (config.publishFlow === true && ['save','clear','answer','importApply','importFile','score','export'].includes(action)) {
+          value.publish = await attemptPublish(resolvedView, action)
         }
         return value
       } finally { if (release) release() }
