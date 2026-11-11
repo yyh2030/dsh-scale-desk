@@ -1,24 +1,35 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test,{after} from 'node:test'
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
-import {Readable} from 'node:stream'
 import {apply} from '../index.js'
 import {normalizeDef,scanTargets,validateData,buildScores,parseCsv,buildDetail,wideCsv} from '../scoring.js'
+import {makeHost,makePage,syntheticStudy} from './support/host.mjs'
+
+// 06 之后绑定记录写在研究核心的 store 里。每个测试文件用独立临时 store，
+// 避免上一次运行留下的 "page/probe → 已删除研究" 记录污染本次运行。
+const researchStore=await mkdtemp(path.join(os.tmpdir(),'scale-batch1-store-'))
+process.env.DSH_RESEARCH_STORE=researchStore
+after(()=>rm(researchStore,{recursive:true,force:true}))
 
 const rawDef=(id='ALPHA')=>({schema:1,id,name:id,short:id,version:'synthetic-v1',itemCount:4,response:{min:1,max:5,labels:{}},items:[1,2,3,4].map(no=>({no,text:'Synthetic item '+no,reverse:[2,4].includes(no)})),waves:['T0','T1'],codes:{T0:[1,2,3,4].map(no=>'alpha_t0_'+no),T1:[1,2,3,4].map(no=>'alpha_t1_'+no)},missing:{rule:'prorate',minAnswered:2},scoring:{type:'sum',extension:'keep-me',subscales:{custom:{label:'Subset',items:[2,4],reverse:[2,4],range:[4,20],multiplier:2,minAnswered:2,extra:{x:1}}}}})
 
 async function fixture(t){
- const root=await mkdtemp(path.join(os.tmpdir(),'scale-batch1-'));t.after(()=>rm(root,{recursive:true,force:true}))
- const labDir=path.join(root,'separate-lab');const defsDir=path.join(labDir,'scales','defs');await mkdir(defsDir,{recursive:true});await mkdir(path.join(labDir,'scales','answers'))
- await writeFile(path.join(defsDir,'ALPHA.json'),JSON.stringify(rawDef(),null,2)+'\n');await writeFile(path.join(labDir,'scales','flow.json'),JSON.stringify({stages:[]}));await writeFile(path.join(labDir,'subjects.csv'),'编号\nRoster-零\n')
- const tools=new Map();let handler
- apply({get:key=>key==='webServer'?{register:spec=>{handler=spec.handler}}:key==='tools'?{register:tool=>tools.set(tool.name,tool)}:undefined,effect:fn=>fn()}, {projectRoot:root,labDir})
- let activeContextRevision,activeSelectionRevision;let activeStudyId
- async function request(action,payload={}){if(!activeStudyId && !payload.__identity){const initial=await request('status',{__identity:true});activeStudyId=initial.study.id;activeContextRevision=initial.contextRevision;activeSelectionRevision=initial.selectionRevision}const req=Object.assign(Readable.from([Buffer.from(JSON.stringify({action,payload:{...payload,studyId:payload.studyId || activeStudyId,contextRevision:payload.contextRevision || activeContextRevision,selectionRevision:payload.selectionRevision ?? activeSelectionRevision}}))]),{method:'POST',url:'/api/scale-desk',headers:{'x-scale-desk':'1'}});let body;const res={setHeader(){},end:s=>body=s};await handler(req,res);const json=JSON.parse(body);if(!json.ok)throw Error(json.error.message);if(json.data.contextRevision)activeContextRevision=json.data.contextRevision;if(Number.isInteger(json.data.selectionRevision))activeSelectionRevision=json.data.selectionRevision;return json.data}
- return {root,labDir,defsDir,tools,request}
+  const root=await mkdtemp(path.join(os.tmpdir(),'scale-batch1-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const labDir=path.join(root,'separate-lab');const defsDir=path.join(labDir,'scales','defs');await mkdir(defsDir,{recursive:true});await mkdir(path.join(labDir,'scales','answers'))
+  await writeFile(path.join(defsDir,'ALPHA.json'),JSON.stringify(rawDef(),null,2)+'\n');await writeFile(path.join(labDir,'scales','flow.json'),JSON.stringify({stages:[]}));await writeFile(path.join(labDir,'subjects.csv'),'编号\nRoster-零\n')
+  // 合成研究定义放在临时目录；dataRoot 指回原来的分离 lab 目录，路径断言保持不变。
+  const studyPath=path.join(root,'study.json')
+  await writeFile(studyPath,JSON.stringify(syntheticStudy({studyId:'scale-batch1',name:'批量导入合成研究',dataRoot:'./separate-lab',visits:[{id:'T0',label:'基线',order:0},{id:'T1',label:'随访',order:1}]}),null,2)+'\n')
+  const host=makeHost(root)
+  apply(host.ctx,{projectRoot:root})
+  const handler=host.routes.get('/api/scale-desk');assert.ok(handler,'scale-desk 应注册路由')
+  // 每个页面一个 pageId；studyConnect 之后写请求自动携带 binding token（06 契约）。
+  const page=makePage(handler,{workspacePath:root})
+  await page.connect(studyPath)
+  return {root,labDir,defsDir,tools:host.tools,request:page.request,page,studyPath}
 }
 
 // Run the real client factory and hook state. Expose lexical components only in
@@ -82,8 +93,14 @@ test('generic Q headers stay candidates until explicit target selection',async t
 
 test('opaque IDs, separate roster, duplicate detail/tool/export, and missing participants agree',async t=>{
  const f=await fixture(t);let status=await f.request('status');assert.equal(status.subjectsPath.replaceAll('\\','/'),path.join(f.labDir,'subjects.csv').replaceAll('\\','/'));assert.ok(status.scores.rows.some(row=>row.id==='Roster-零'))
- for(const id of ['00123','P-014','123456','合成编号-零','12345.0',"'quoted'"]){await f.request('save',{scale:'ALPHA',wave:'T0',id,values:{2:'2',4:'4'}});assert.equal((await f.request('answer',{scale:'ALPHA',wave:'T0',id})).id,id)}
- const source={text:'编号,Q1,Q2,Q3,Q4\nP-014,1,3,3,5',scale:'ALPHA',wave:'T0'};await f.request('importApply',source);assert.equal((await f.request('detail',{id:'P-014',scale:'ALPHA',wave:'T0'})).status,'duplicate');await assert.rejects(f.request('answer',{id:'P-014',scale:'ALPHA',wave:'T0'}),/多份/);const tool=await f.tools.get('scale_score').execute({id:'P-014'});assert.match(tool.text,/duplicate.*未计分/);assert.doesNotMatch(tool.text,/Subset：/)
+ // 当前契约：编号是不含首尾空白的字符串，但 Excel/QuestionPro 导出的 "12345.0"
+ // 会按 normalizeId 去掉无意义的小数零（见 scoring.js），否则同一编号会被当作两个人。
+ // 其余编号必须原样保留；这里保留原意图，只把这一条期望改成当前契约。
+ for(const id of ['00123','P-014','123456','合成编号-零','12345.0',"'quoted'"]){const expected=id==='12345.0'?'12345':id;await f.request('save',{scale:'ALPHA',wave:'T0',id,values:{2:'2',4:'4'}});assert.equal((await f.request('answer',{scale:'ALPHA',wave:'T0',id})).id,expected)}
+ const source={text:'编号,Q1,Q2,Q3,Q4\nP-014,1,3,3,5',scale:'ALPHA',wave:'T0'};await f.request('importApply',source);assert.equal((await f.request('detail',{id:'P-014',scale:'ALPHA',wave:'T0'})).status,'duplicate');await assert.rejects(f.request('answer',{id:'P-014',scale:'ALPHA',wave:'T0'}),/多份/);
+ // 07 之后 scale_score 走严格本地投影：只回状态/计数，不再回 "duplicate…未计分" 的逐人原因，
+ // 也不返回分项名。同一事实改为断言 "没有可计分记录（records 0，status missing）" 且不泄露分项。
+ const tool=await f.tools.get('scale_score').execute({id:'P-014'});assert.match(tool.text,/状态 missing/);assert.match(tool.text,/records 0/);assert.doesNotMatch(tool.text,/Subset：/)
  await f.request('score');const detail=parseCsv(await readFile(path.join(f.labDir,'scores_detail.csv'),'utf8')).slice(1).filter(row=>row[0]==='P-014');assert.ok(detail.every(row=>row[7]===''&&row[8]==='duplicate'));const wide=parseCsv(await readFile(path.join(f.labDir,'data_wide.csv'),'utf8'));assert.equal(wide.find(row=>row[0]==='P-014')[wide[0].indexOf('ALPHA_T0')],'')
  const a=normalizeDef(rawDef('A'));const b=normalizeDef(rawDef('B'));const files=[{scale:'A',wave:'T0',rows:[{id:'00123',values:{}},{id:'P-014',values:{}}]},{scale:'B',wave:'T0',rows:[{id:'00123',values:{}}]}];const issues=validateData([a,b],files);assert.deepEqual(issues.find(item=>item.scale==='B'&&item.wave==='T0'&&item.ids).ids,['P-014']);assert.ok(!issues.some(item=>item.ids?.includes(undefined)))
 })
