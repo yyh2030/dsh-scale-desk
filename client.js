@@ -511,7 +511,7 @@ window.__ModuleLoader__.load({
         init.method = 'POST'
         init.headers['content-type'] = 'application/json'
         const needsRevision = !READ_ACTIONS.includes(action) && !CONNECT_ACTIONS.includes(action) && activeRevision
-        const submitted = { ...(needsRevision ? { expectedRevision: activeRevision } : {}), studyId: activeStudyId, ...payload, ...ticket.body, binding: ticket.token }
+        const submitted = { ...(needsRevision ? { expectedRevision: activeRevision } : {}), studyId: activeStudyId, ...payload, ...ticket.body }
         init.body = JSON.stringify({ action, payload: submitted })
       }
       const res = await fetch(url, init)
