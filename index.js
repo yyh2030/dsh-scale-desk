@@ -909,6 +909,16 @@ export function apply(ctx, config = {}) {
         return resolveConfig({ studyPath, pythonPath: activeConfig.pythonPath }).study
       },
       currentIdentity() {
+        // 页面/显式路径都没有时，统一回退到旧配置研究，避免同一启动里四个插件各落一个空工作区研究。
+        if (!cfg.study.path) {
+          try {
+            const legacy = binding.legacyStudy()
+            if (legacy && legacy.studyPath) {
+              activeConfig = { ...activeConfig, studyPath: legacy.studyPath }
+              cfg = resolveConfig(activeConfig)
+            }
+          } catch { /* 没有旧配置时保持空研究 */ }
+        }
         // 空研究（尚未显式连接）时数据根与核心的默认根对齐，避免无谓切换；
         // 业务读写仍用 cfg.labDir，所以配置了 labDir 也不会被覆盖。
         const dataRoot = cfg.study.path ? cfg.labDir : path.resolve(config.projectRoot || process.cwd(), '_lab')
