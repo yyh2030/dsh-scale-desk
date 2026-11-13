@@ -900,7 +900,7 @@ export function apply(ctx, config = {}) {
 
   const binding = hostBinding(ctx, {
     plugin: 'scale-desk',
-    version: '0.2.0',
+    version: '0.3.2',
     config,
     hooks: {
       // 未配置研究时的默认根，与核心的 emptyDescriptor 用同一个基准，避免无谓切换。
@@ -2108,8 +2108,8 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  const readActions = new Set(['status','refresh','definition','textsPreview','answer','detail','answers','suspicious','importPreview','validate','studyConfig','studyPreview','capabilities'])
-  const actionNames = new Set([...Object.keys(actions), 'capabilities', 'publishRetry'])
+  const readActions = new Set(['studyChoices','status','refresh','definition','textsPreview','answer','detail','answers','suspicious','importPreview','validate','studyConfig','studyPreview','capabilities'])
+  const actionNames = new Set([...Object.keys(actions), 'capabilities', 'publishRetry', 'studyChoices', 'studyDiscover', 'studyCreate', 'studyRelocate'])
 
   /** 读：按调用身份解析研究并切换插件，读期间计数，切换会被拒绝。 */
   async function runRead(actor, run) {
@@ -2166,6 +2166,18 @@ export function apply(ctx, config = {}) {
     if (action === 'capabilities') {
       await runRead(actor, () => null)
       return { ...binding.capabilities(actor), study: cfg.study.identity }
+    }
+    if (action === 'studyChoices') return binding.studyChoices(actor)
+    if (action === 'studyDiscover') return binding.discoverStudy(payload.dir)
+    if (action === 'studyRelocate') {
+      const view = binding.relocateStudy(actor, payload)
+      const active = await binding.activate(actor)
+      return { study: cfg.study.identity, binding: active, connected: view }
+    }
+    if (action === 'studyCreate') {
+      const view = binding.connect(actor, { ...payload, create: true })
+      const active = await binding.activate(actor)
+      return { study: cfg.study.identity, binding: active, connected: view }
     }
     // 显式连接研究：写页面/会话绑定并激活，不走写入令牌校验。
     if (action === 'studyConnect' || action === 'studySave') {

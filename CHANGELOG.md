@@ -108,3 +108,136 @@ ode --check + 全套 168/168。
 - 根因分类：19 个失败全部是夹具身份过时（同一类，两个来源）——旧夹具 apply 只给 `{projectRoot,labDir}`，没有 study.json、没有 pageId/令牌，写请求被识别为 probe 并报 `study_missing`；同时进程级默认 store 残留“probe → 已删除临时研究”的记录，使失败在多次运行间复现。`tests/study.test.mjs` 里旧 `researchSelection` peer-busy 机制已被 06 绑定层取代，按当前契约用核心持久化失败验证回滚。
 - 验证：`cd D:\dsh-plugins\scale-desk; node --test tests/*.test.mjs` → **28 tests / 28 pass / 0 fail**；`node tests/smoke.mjs` → 通过；`cd D:\dsh-plugins\research-core; node --test "tests/*.test.mjs"` → **194 tests / 194 pass / 0 fail**（未改 research-core 共享代码；此前两次全量分别因 PDF 渲染与 autoRun 去抖在并发负载下超时，单文件复跑与第三次全量均通过）。
 - 范围：未写真实研究数据，未 git commit/push。
+
+## 2026-11-11 · 09 私有副本迁移与回退演练（M09）
+
+- **research-core 1.4.0（仅新增测试，未改生产代码）**（新增 `tests/remediation-09-migration.test.mjs`）
+  - M09-A：mkdtemp 合成研究写入 2 名参与者、人口学、2 条观察与 2 条分数；记录四数据集 revision/contentHash/generationId 与来源健康（ok），并记分析表基线（2 行、hash）。
+  - M09-B：`backup` 到临时目录，核对 backup.json 的数据集清单与 revision/contentHash、逐文件 sha256/bytes、可由清单重算的 digest，以及 `restorePreflight.ok`。
+  - M09-C：数据根整体复制到另一临时目录、研究定义复制到影子根；同 instanceId 从新路径读取 revision/contentHash/health 与分析表 hash 均与备份前一致；原数据根逐文件 hash 不变。副本继承实例身份，换新 instanceId 打开返回 `wrong_instance`（<2s）。
+  - M09-D：影子副本新增 P-003、一条观察与一条分数，只出现在影子；原根人数/revision/hash 不变。回退前把切换后数据单独 backup；旧备份 restore 到另一个干净根，恢复 2 人旧数据、健康 ok、新增数据不在其中；再用切换后备份 restore，P-003/观察/分数可重放；restore 不删除新增代次。
+  - M09-E：`restorePreflight` 对错误实例、schemaVersion=2、不同 studyId、缺 backup.json、篡改数据文件（hash/digest）均返回 ok=false 且 <2s；`restore` 对预检失败抛 `source_invalid`（committed=false），不写当前数据根。
+  - M09-F：记录同根就地 restore 的真实限制：只写 current.json，不更新 `transactions/study-pointer.json`；`head()` 取指针与 current 中较大的 revision，因此 restore 返回 `restored:true` 后读取仍是指针指向的切换后更高代次，`reconcile()` 会把 current 补回该代次。回退需另根恢复或先停写后换根，当前 API 没有重置提交指针的入口。
+- 验证：`cd D:\dsh-plugins\research-core; node --test "tests/*.test.mjs"` → **200 tests / 200 pass / 0 fail**（基线 194 + 新增 6，未改旧断言）；新文件单跑 6/6。
+- 范围：全部 mkdtemp/os.tmpdir 合成数据，`assertInsideTemp` 拒绝真实研究路径字样；未打开/复制/写入 D:\yyh-lab 或真实 study；未改生产代码；未 git commit/push。
+
+## 2026-11-11 · 09 合成端到端脚本（E2E）
+
+- **research-core 1.4.0（仅新增测试，未改生产代码）**（新增 `tests/remediation-09-e2e.test.mjs`）
+  - E2E-01 材料：临时目录写中文基线/随访、两份互斥计分规则与中文任务；`materials_scan` → `materials_decisions` 确认 2 访视 2 任务 → `study_draft_preview` → `study_draft_save` → `prep_readiness`。断言访视 ID 为 `visit-<sha12>`、保存与重扫预览 ID 不漂移、同名不同来源不合并、`decisions.json` 保留 kind/label/sourcePath/sourceSha256/reason；计分冲突与未知 dryRun 如实阻断准备度。
+  - E2E-02 登记/人口学/入组：先 `participants_manage` 登记 2 人，再用 `flow.demographics.commit` 在同一事务里登记 P-003/P-004 并提交 4 行人口学；核对 participants 只递增一代、demographics revision=1，入组后总男女 2/2，arm=A/B 各 2 人且各 1 男 1 女。
+  - E2E-03 量表两波次：基线 4 行（P-001 重复提交 + 修正、P-002 缺一题、P-003 正常）与随访 3 行；首轮计分 P-001 为 conflict、两行 duplicate/null，缺题按比例得 2.67；核心 `observations.adjudicate` 选中修正 submission 后重计分，scores 只给选中行 4.25，被拒行仍保留 null/duplicate/reason；分析表未裁决时为缺失。
+  - E2E-04 任务 CSV：同内容提交两次幂等（来源 1 个、观察不重复）；同名不同内容成为第 2 来源版本并只新增本次观察；缺日期列的损坏源提交被拒绝，来源与观察均不增加。
+  - E2E-05 source=core 分析：`variables` 含 `type:'score'`（GARDEN baseline/followup）；3 人时 ttest 因 `eligibleSubjects=3 < gate 4` 为 not_run，加 P-004 后 executed；改方案新增 sample、排除 P-002 均产生新 runId/指纹，旧 run 标 stale；脚本同代码复用缓存，改代码生成新 runId 且不复用。
+  - E2E-06 导出读回：真实运行 descriptives+ttest 后 `export`，用 python-docx/openpyxl 读回 tables.docx/tables.xlsx：ttest 表 n=8、meanDiff=-6.50、CI 与运行表一致，XLSX 数值类型与 `0.00` 格式正确，DOCX 两位小数一致；分组估计图存在；本机 input.csv 保留 P-001，而 results.json/manifest/HTML/DOCX/XLSX 均不含逐人编号、绝对路径或外部 URL。
+  - E2E-07 双研究交错：A/B 使用相同编号 P-001…P-003 与相同量表定义，交错 score A→B→A；A 的 P-001=2、B 的 P-001=4，submissionId 各自归属；页面绑定、`study_status`/`flow_projection` 后台读取均不串研究。
+  - E2E-08 锁/崩溃/重启：持锁时另一实例提交在 <2s 内 `dataset_conflict` 且无半成品；坏锁 <2s 返回 `recovery_required` 且不静默删除；修复后可提交；死进程锁被归档到 `transactions/stale` 并继续提交；重新打开数据根后 participants/demographics/tasks revision 与值正确、无待恢复锁。
+  - E2E-09 断网/本地：把 `globalThis.fetch` 换成抛错函数后仍完成本地分析与导出（fetch 调用 0 次）；report.html/results.json/manifest.json 无外部 URL、无逐人编号、无本机路径；Agent `analysis_status` 摘要同样不带路径/编号；静态核对三个业务插件未引入 fetch/node:http(s)。
+  - SKIP-09-9：提醒创建/改期/解除/回执与手机状态属于 08 阶段、需要官方 gateway，按任务说明 skip 并写明原因，不用本地 stub 伪造。
+- **发现的问题（记录，不擅自改语义）**：`research-core/analysis.mjs` 的 `scoreByKey` 对同一 `(participantId, scaleId, waveId, subscaleKey)` 只保留第一条分数行；当重复提交的两行同 key 且被拒行（numericValue=null）在前时，即使核心已裁决选中另一 submission，分析表仍读到缺失。E2E-03 用 `t.diagnostic` 与显式断言记录该现状；E2E-05 用无歧义单一 submission 覆盖 source=core score 变量。修复建议：优先选 `selectedSubmissionId` 对应行或 numericValue 非空行，但本轮未改生产代码。
+- 验证：`cd D:\dsh-plugins\research-core; node --test "tests/*.test.mjs"` → **210 tests / 209 pass / 1 skipped / 0 fail**（基线 200 + 新增 10：9 pass + 1 skip）；新文件单跑同结果。未改旧断言，未删旧测试。
+- 范围/未覆盖：全部 mkdtemp 合成数据，`assertInsideTemp` 拒绝真实研究路径字样；未打开/复制/写入 D:\yyh-lab 或真实 study；未改生产代码；未 git commit/push。未覆盖实际 GUI 视觉/交互验收、真实提醒 gateway/手机端与真实跨进程 kill 崩溃（E2E-08 用坏锁与“同主机同启动实例、进程已退出”的锁记录模拟）。
+
+## 2026-11-11 · 09 E2E 发现并修复分数选择缺陷
+
+- research-core/analysis.mjs：scoreByKey 不再按文件顺序取第一条；同一 (participant, scale, wave, subscale) 优先 selectedSubmissionId 对应行，其次优先有数值行。修复裁决后被拒行在前导致分析表读成缺失的问题。
+- tests/remediation-09-e2e.test.mjs：E2E-03 改为断言裁决后分析层取到 4.25。
+- 验证：全量 210 tests / 209 pass / 1 skipped（skip=08 gateway 提醒）。
+- 提交：research-core 本次推送。
+## 2026-11-11 · 09 B02 支持矩阵
+
+- analysis-run README（中/英）增加支持矩阵与统计后端准备说明。
+- 证据：node vendor/install.mjs --check → exit 0；平台限 Windows x64 + CPython 3.12。
+- 未验证：macOS/Linux、py3.13、ARM。
+## 2026-11-11 · 09 V01 证据与人工清单
+
+- live 检查：Host 工具全部可发现；client slot 未见研究插件专用条目；bsk browsers=[]。
+- 新增 reports/.../09-V01-人工验收清单.md（含证据与逐项清单）。
+- 未完成：真实页面视觉/交互验收（需浏览器扩展或人工走查）。
+## 2026-11-11 · 09 V01 浏览器连接与认证边界
+
+- bsk 扩展实测已连接（实例 ccb9e4a1，Chrome 157 / 扩展 0.4.2 / 协议 1.8）；上一轮未连接是我停掉了 daemon。
+- 受控 Chrome 打开 127.0.0.1:55322 被要求认证；DSH 应用窗口自带启动 token，受控 Chrome 没有该 cookie。
+- 未提取 token/凭证；需用户提供完整认证 URL 或人工走查 09-V01-人工验收清单.md。
+- 其余 09 项不受影响（210 tests / 209 pass / 1 skipped）。
+## 2026-11-11 · 09 V01 桌面应用真实验收（部分）
+
+- 用 Windows UIAutomation + 窗口截图在 DSH 桌面应用窗口完成真实验收（浅色、1941x1243）：
+  资料板、量表计分（真实计数 72/72、1607 份）、分析直通（本机私有研究、数据已找到）渲染正常；
+  侧栏四个插件入口齐全。截图存 reports/.../09-V01-证据/。
+- 发现待查：实验运行台显示研究连接·
+## 2026-11-11 · 09 V01 键盘遍历
+
+- Tab 顺序覆盖 资料板/人口学录入/实验运行台/量表计分/分析直通，均有可读名称，无焦点陷阱。
+- 剩余：深色、长表、PDF/Office、分享审阅（需用户授权）。
+## 2026-11-12 · 修复页面写入不携带绑定令牌（P0）
+
+- 根因：06 的共享 client-identity ody() 只发 pageId/workspace/revision，没发 inding 令牌；
+  四个服务端 assertWrite 都从 payload.binding 取 token，导致页面写入永远 binding_required，
+  横幅一直显示绑定已过期，点重新加载研究只 newPage 不重新 studyConnect，也会复发。
+- 修复：ody() 在已记住令牌时发送 inding；重新加载研究改为 newPage → studyConnect(研究路径) → load。
+- 新增 tests/remediation-09-binding-token.test.mjs（2 例：body 带 token、四个 bundle 同源）。
+- 验证：binding/token 测试 8/8；remediation-06-binding 通过。
+- 说明：全量测试在本机并行负载下出现 autoRun/ANA/lock 时序性失败，单跑均通过（见 09-完成记录）。
+## 2026-11-12 · 真正根因：客户端用 ticket.token 覆盖了 binding
+
+- study-ops/scale-desk/demographic-coder/analysis-run 的 call() 在 body 里写
+  inding: ticket.token，而 ticket 只有 {snapshot,headers,body}，	icket.token 恒为 undefined；
+  它把 body() 里正确的 inding 覆盖掉，导致页面写入永远 binding_required。
+- 修复：删除四个 client.js 的 inding:ticket.token 覆盖，信任 ticket.body 的 binding。
+- 回归：remediation-09-binding-token 增加不得用
+## 2026-11-12 · 09 V01 深色主题
+
+- 设置→通用设置→外观→深色，应用整体深色渲染正常；截图 09-V01-证据/设置-深色.png。
+- 插件面板未单独深色截图（UIA 点击受 DPI 影响），浅色下已验证；主题可随时改回跟随系统。
+## 2026-11-12 · 09 文案与版本一致性
+
+- study-ops 客户端：区分 binding_required（页面绑定已失效，点重新加载研究）与研究变化（binding_conflict/study_missing），
+  不再把所有写入失败都显示成研究已变化；记录 staleKind。
+- analysis-run：内部 VERSION 常量为 0.2.0 已同步为 0.5.0（与 package/export 一致）。
+- 验证：node --check 通过；绑定/路由测试此前 8/8。
+## 2026-11-12 · 09 V01 发现分组卡片与核心投影不一致
+
+- 运行台分组卡合计 89，核心 flow_projection 已入组 63、分组合计 63；来源/分母不一致，列 P1 待修。
+- 另记录：102? 实际 100 参与者 = 63 入组 + 37 登记未入组；性别 10/43/0/10/0。
+## 2026-11-12 · 09 修复分组卡分母
+
+- 运行台分组进度在 core 视图下改用已提交代次的 enrolled 分组与性别，不再混用旧文件分母（89 → 63）。
+- study-ops client 修复；node --check 通过；需重启确认。
+## 2026-11-12 · 09 V01 合成长表导出与分享泄漏修复
+
+- 120 人合成分析经真实路由导出：correlation 105 行；DOCX 106 行、XLSX 110 行；PDF 6 页。
+- 修复分享包泄漏：privacy 过滤 subjectIds 等逐人集合；新增 P02-C 回归测试（11/11 隐私测试通过）。
+- 证据：reports/.../09-V01-证据/合成-长表导出/。
+## 2026-11-12 · 09 启动一致性回退与测试存储隔离
+
+- 新增 core.legacyStudy()（host 暴露）：无页面/显式路径时，analysis-run/scale-desk/demographic-coder
+  回退到 study-ops 注册的 legacy 研究，不再各自落到 study-<空根hash>。
+- readCapabilities 自愈：能力查询把各插件 prepareSwitch 到当前页面/会话绑定，未打开过的面板不再误报不一致；busy 时保持原状并如实报告。
+- 测试隔离：harness.mjs 默认给每个测试进程 mkdtemp 的 DSH_RESEARCH_STORE，防止测试把临时研究写进用户 store。
+- 清理历史测试污染：instances 193→2、bindings 17→13（备份 *.bak-20261112）。
+- 测试：新增 remediation-09-fallback 2 例；全量 214 tests / 213 pass / 0 fail / 1 skipped。
+## 2026-11-13 · 09 重启后最终验证
+
+- 四插件一致绑定 local-private-research；运行台入组 63、分组 12/15/18/18 合计 63，无绑定过期横幅。
+- 证据：reports/.../09-V01-证据/运行台-重启后.png；全量 214/213/0/1。
+## 2026-11-13 · followup 01 继续修复（A1—A7）
+
+- core 1.5.0：connect(create:true) 真正创建、已有冲突不覆盖；restore 同根有已提交数据时
+  unsupported_restore_target；analysis 依据当前裁决校验分数（撤销=adjudication_revoked，
+  改选未重算=score_pending）；flow 裁决版本单调递增。
+- analysis-run 0.5.1 / engine 2.5.0：排除内容进入自动运行指纹；缓存要求完整 artifactHashes
+  并拒绝缺 hash/篡改/越界；list 分支表格补 analysisSet；engine 直调自加载 vendor 统计后端。
+- scale-desk 0.3.1：发布分数冻结 observationId/adjudicationVersion/taskId/visitId。
+- 测试：followup-01 6 例、FIX-02 scheduler 1 例、analysis-auto 真实排除补跑、FIX-07 迁移用例；
+  全量 222 tests / 221 pass / 0 fail / 1 skipped；scale 28/28。
+- 限制：裁决后需手动重新计分；legacy scores 未标记 unverified；创建入口仅 study-ops（02 统一）。
+## 2026-11-13 · followup 02 共享研究选择器（B1—B5）
+
+- core 1.6.0：studyChoices（最近研究/作用域/缺失状态）、discoverStudy（三处约定配置）、
+  relocateStudy（同数据根才允许移动，复制/分叉冲突）、lastOpenedAt/openCount。
+- 四插件路由新增 studyChoices/studyDiscover/studyCreate/studyRelocate；demographic 创建改走核心。
+- 客户端：新增共享 client-study-picker.mjs 与 sync 脚本，四插件顶部统一“研究：名称 ▾”入口，
+  最近研究、选择文件夹、新建、高级路径、缺失重定位、页面/工作区/会话语义。
+- 测试：followup-02 B1/B2/B3/relocate/B4/B5 六例；B6 实际 GUI 验收待重启后进行。
+- 限制：未实现“在此研究工作区打开会话”；切换后不自动刷新他插件面板；整体移动身份事务未做。
