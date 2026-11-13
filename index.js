@@ -2048,8 +2048,13 @@ export function apply(ctx, config = {}) {
       }
       for (const group of groups.values()) {
         const slot = flow.observations.effective({ participantKey: group.participant.participantKey, visitId, taskId: task.id })
-        let selected = slot && slot.state === 'complete' && slot.effective && slot.effective.evidence ? (slot.effective.evidence.submissionId || null) : null
+        // 只把“当前有效选择”写进分数，并冻结当时的 observation/adjudication 版本；
+        // 之后撤销或改选时分析层据此判定旧分数待重算（A1）。
+        const chosenRow = slot && slot.state === 'complete' ? slot.effective : null
+        let selected = chosenRow && chosenRow.evidence ? (chosenRow.evidence.submissionId || null) : null
         if (!selected && group.submissions.length === 1) selected = group.submissions[0].submissionId || null
+        const observationId = chosenRow ? chosenRow.observationId || null : null
+        const adjudicationVersion = chosenRow && chosenRow.adjudication ? (chosenRow.adjudication.version || null) : null
         for (const row of group.submissions) {
           const result = scoreAnswers(def, row.values)
           const chosen = Boolean(selected) && row.submissionId === selected
@@ -2067,6 +2072,7 @@ export function apply(ctx, config = {}) {
                 : null,
               definitionHash: def.definitionHash || null, definitionVersion: def.version || null,
               selectedSubmissionId: selected, submissionId: row.submissionId || null,
+              taskId: task.id, visitId, observationId, adjudicationVersion,
               answered: sub.answered, missing: sub.missing, itemCount: def.itemCount,
               sourceRevision: `def:${String(def.definitionHash || '').slice(0, 8)}|sub:${row.submissionId || ''}`,
               recordedAt: new Date().toISOString(),
