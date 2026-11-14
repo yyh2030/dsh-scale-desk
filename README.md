@@ -4,7 +4,7 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)(`dsh`)写的研究插件:量表计分台。量表定义、作答录入、列映射导入、一键计分与质控校验放在同一个面板里,分数从哪一版定义、哪一版作答算出来是可追溯的。
 
-版本 0.2.0 · 需要 DSH ≥ 0.2.2-rc.1 · MIT 许可 · 依赖 [`@local/research-core`](https://github.com/yyh2030/dsh-research-core)
+版本 0.3.2 · 需要 DSH ≥ 0.2.2-rc.1 · MIT 许可 · 依赖 [`@local/research-core`](https://github.com/yyh2030/dsh-research-core)
 
 ## 为什么需要它
 
