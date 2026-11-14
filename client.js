@@ -3405,7 +3405,6 @@ window.__ModuleLoader__.load({
       const subjects = data ? data.scores.counts.subjects : 0
 
       return h('div', { className: 'sd-root' },
-        h('button', { className: 'sd-btn sd-btn-quiet', type: 'button', style: { margin: '0 0 10px' }, onClick: openPickerFromButton }, '研究切换'),
         h('div', { className: 'sd-top' },
           h('div', { className: 'sd-brand' },
             h('strong', null, '量表计分'),
@@ -3420,6 +3419,7 @@ window.__ModuleLoader__.load({
               )
             : null,
           h('div', { className: 'sd-actions' },
+            Btn({ children: '研究切换', kind: 'ghost', small: true, onClick: openPickerFromButton }),
             Btn({ children: busy === 'refresh' ? '刷新中…' : '刷新', kind: 'ghost', small: true, onClick: async () => { setBusy('refresh'); await refresh(); setBusy('') } }),
             Btn({ children: '导出', kind: 'outline', small: true, onClick: runExport, disabled: Boolean(busy) || !data })
           )
@@ -3541,7 +3541,7 @@ window.__ModuleLoader__.load({
         headers: () => ({ 'x-scale-desk': '1', ...identity.headers() }),
         pickDirectory: ui && typeof ui.pickDirectory === 'function' ? () => ui.pickDirectory() : null,
       })
-      picker.install(); picker.open()
+      picker.open()
     } catch (error) {
       try { window.alert('研究选择器不可用：' + (error && error.message ? error.message : String(error))) } catch { /* 无窗口 */ }
     }
@@ -3553,13 +3553,6 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         hostCtx = ctx
         ctx.effect(() => insertStyles(), 'scale-desk: styles')
-        try {
-          const ui = (ctx.get && ctx.get('uiWorkspace')) || ctx.uiWorkspace
-          window.__DSH_RESEARCH_PICKER__ && window.__DSH_RESEARCH_PICKER__.createStudyPicker({
-            plugin: 'scale-desk', route: '/api/scale-desk', headers: () => ({ 'x-scale-desk': '1', ...identity.headers() }),
-            pickDirectory: ui && typeof ui.pickDirectory === 'function' ? () => ui.pickDirectory() : null,
-          }).install()
-        } catch (error) { console.warn('[scale-desk] study picker not installed', error) }
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
             { name: 'sidebar.panellist', id: 'scale-desk', order: 32, label: '量表计分' },
