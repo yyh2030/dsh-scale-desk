@@ -3396,6 +3396,7 @@ window.__ModuleLoader__.load({
       const subjects = data ? data.scores.counts.subjects : 0
 
       return h('div', { className: 'sd-root' },
+        h('button', { className: 'sd-btn sd-btn-quiet', type: 'button', style: { margin: '0 0 10px' }, onClick: openPickerFromButton }, '研究切换'),
         h('div', { className: 'sd-top' },
           h('div', { className: 'sd-brand' },
             h('strong', null, '量表计分'),
@@ -3520,6 +3521,22 @@ window.__ModuleLoader__.load({
         return this.props.children
       }
     }
+
+  function openPickerFromButton() {
+    try {
+      const ui = (hostCtx && hostCtx.get && hostCtx.get('uiWorkspace')) || (hostCtx && hostCtx.uiWorkspace)
+      const factory = window.__DSH_RESEARCH_PICKER__
+      if (!factory) throw new Error('共享选择器模块未加载')
+      const picker = factory.createStudyPicker({
+        plugin: 'scale-desk', route: '/api/scale-desk',
+        headers: () => ({ 'x-scale-desk': '1', ...identity.headers() }),
+        pickDirectory: ui && typeof ui.pickDirectory === 'function' ? () => ui.pickDirectory() : null,
+      })
+      picker.install(); picker.open()
+    } catch (error) {
+      try { window.alert('研究选择器不可用：' + (error && error.message ? error.message : String(error))) } catch { /* 无窗口 */ }
+    }
+  }
 
     return {
       inject: ['slots'],
