@@ -327,3 +327,10 @@ ode --check + 全套 168/168。
 - 全量后加强共享段断言：去掉生成脚本不保留的region标记后比较正文，11/11关联测试通过，未放宽实际实现一致性要求。
 - 量表28/28与Host smoke通过；分析/人口学独立目录0 tests不计为通过套件。所有本轮后台作业已收集，浏览器会话与自行启动的daemon已结束。
 - 最终证据分层：矩阵SW-07/10保留部分，SW-08/09仅自动化通过；当前GUI鉴权页无法验证正常界面，未确认部署/内存重载。统计多量表门槛、旧日期兼容、撤销后真实重算链路及命令式DOM残留等限制详见工作区04-debug复核结果-20261115.md；本轮不是全面上线认证。
+## 2026-11-17 · 修复量表 Excel 导入的 pythonPath 被 undefined 覆盖
+
+- scale-desk 切换研究时构造 { studyPath, pythonPath: activeConfig.pythonPath }，
+  即使插件未配置 pythonPath 也会把 study.plugins.scales.pythonPath 覆盖成 undefined，
+  最终回退到系统 python（Microsoft Store 别名），Excel 导入报 Python not found。
+- 改为仅在明确配置 pythonPath 时才覆盖；研究定义里的 pythonPath 重新生效。
+- 版本 0.3.3；scale tests 28/28。

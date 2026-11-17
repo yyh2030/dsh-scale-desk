@@ -4,7 +4,7 @@
 
 A research plugin written for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`): the scale scoring desk. Scale definitions, response entry, column-mapped import, one-click scoring and quality checks live in one panel, and it is traceable which version of the definition and which version of the responses produced a score.
 
-Version 0.3.2 · Requires DSH ≥ 0.2.2-rc.1 · MIT license · Depends on [`@local/research-core`](https://github.com/yyh2030/dsh-research-core)
+Version 0.3.3 · Requires DSH ≥ 0.2.2-rc.1 · MIT license · Depends on [`@local/research-core`](https://github.com/yyh2030/dsh-research-core)
 
 ## Why it exists
 

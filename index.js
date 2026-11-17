@@ -900,13 +900,13 @@ export function apply(ctx, config = {}) {
 
   const binding = hostBinding(ctx, {
     plugin: 'scale-desk',
-    version: '0.3.2',
+    version: '0.3.3',
     config,
     hooks: {
       // 未配置研究时的默认根，与核心的 emptyDescriptor 用同一个基准，避免无谓切换。
       emptyBase: () => path.resolve(config.projectRoot || process.cwd()),
       loadStudy(studyPath) {
-        return resolveConfig({ studyPath, pythonPath: activeConfig.pythonPath }).study
+        return resolveConfig({ studyPath, ...(activeConfig.pythonPath ? { pythonPath: activeConfig.pythonPath } : {}) }).study
       },
       currentIdentity() {
         // 页面/显式路径都没有时，统一回退到旧配置研究，避免同一启动里四个插件各落一个空工作区研究。
@@ -926,7 +926,7 @@ export function apply(ctx, config = {}) {
       },
       prepareSwitch(studyPath) {
         if (activeReads || building || pendingWrites > 0) throw new RouteError('busy', '量表正在写入，请稍后切换')
-        const nextConfig = { studyPath, pythonPath: activeConfig.pythonPath }
+        const nextConfig = { studyPath, ...(activeConfig.pythonPath ? { pythonPath: activeConfig.pythonPath } : {}) }
         const next = resolveConfig(nextConfig)
         const marker = path.join(next.labDir, '.scale-study.json')
         try { const owner = JSON.parse(readFileSync(marker, 'utf8')); if (owner.studyId !== next.study.id) throw new RouteError('study_mismatch', '目标数据目录属于其他研究') } catch (error) { if (error.code !== 'ENOENT') throw error }
@@ -954,10 +954,10 @@ export function apply(ctx, config = {}) {
       return { valid: problems.length === 0, problems, definition, path: payload.path ? path.resolve(payload.path) : null }
     },
     async studyConnect(payload, actor) {
-      const requested = String((payload && payload.path) || '').trim()
+      const requested = String((payload && (payload.studyPath || payload.path)) || '').trim()
       if (!requested) throw new RouteError('invalid', '请填写研究定义路径')
       // 连接前先按旧行为核对目标数据目录归属，避免写入一条指向别的研究的绑定。
-      const next = resolveConfig({ studyPath: path.resolve(requested), pythonPath: activeConfig.pythonPath })
+      const next = resolveConfig({ studyPath: path.resolve(requested), ...(activeConfig.pythonPath ? { pythonPath: activeConfig.pythonPath } : {}) })
       const marker = path.join(next.labDir, '.scale-study.json')
       try { const owner = JSON.parse(readFileSync(marker, 'utf8')); if (owner.studyId !== next.study.id) throw new RouteError('study_mismatch', '目标数据目录属于其他研究') } catch (error) { if (error.code !== 'ENOENT') throw error }
       // 显式连接：只改当前页面/会话的绑定，并把绑定修订号 +1（旧令牌随即失效）。
